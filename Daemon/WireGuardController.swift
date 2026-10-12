@@ -53,7 +53,20 @@ final class WireGuardController {
 
     // MARK: - Config management
 
+    /// Config names are used directly as file names under the configs directory, so reject anything
+    /// that is empty or could escape the directory (`/`, `..`) or break the file name (line breaks).
+    static func isValidConfigName(_ name: String) -> Bool {
+        guard !name.isEmpty else { return false }
+        guard name != ".", name != ".." else { return false }
+        guard !name.contains("/"), !name.contains("\n"), !name.contains("\r") else { return false }
+        return true
+    }
+
     func importConfig(name: String, rawConfig: String) -> (Bool, String?) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard WireGuardController.isValidConfigName(trimmedName) else {
+            return (false, L("daemon.config.invalidName"))
+        }
         let dir = VacuoleDaemonConstants.configsDir
         do {
             try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -67,7 +80,7 @@ final class WireGuardController {
         guard lower.contains("[peer]") else {
             return (false, L("daemon.config.missingPeerSection"))
         }
-        let path = "\(dir)/\(name).conf"
+        let path = "\(dir)/\(trimmedName).conf"
         do {
             try rawConfig.write(toFile: path, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
@@ -78,6 +91,9 @@ final class WireGuardController {
     }
 
     func deleteConfig(name: String) -> (Bool, String?) {
+        guard WireGuardController.isValidConfigName(name) else {
+            return (false, L("daemon.config.invalidName"))
+        }
         let path = "\(VacuoleDaemonConstants.configsDir)/\(name).conf"
         guard FileManager.default.fileExists(atPath: path) else {
             return (false, L("daemon.config.notFound", name))
@@ -93,11 +109,8 @@ final class WireGuardController {
     /// Rename a config file, keeping `activeConfigName` in sync when it points at the renamed config.
     func renameConfig(from oldName: String, to newName: String) -> (Bool, String?) {
         let new = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !new.isEmpty else {
-            return (false, L("daemon.config.renameEmpty"))
-        }
-        guard !new.contains("/"), !new.contains("\n"), !new.contains("\r") else {
-            return (false, L("daemon.config.renameInvalid"))
+        guard WireGuardController.isValidConfigName(new) else {
+            return (false, L("daemon.config.invalidName"))
         }
         guard new != oldName else { return (true, nil) }
 
@@ -155,6 +168,9 @@ final class WireGuardController {
     // MARK: - Tunnel start/stop
 
     func startTunnel(configName: String) -> (Bool, String?) {
+        guard WireGuardController.isValidConfigName(configName) else {
+            return (false, L("daemon.config.invalidName"))
+        }
         guard tunnelState != .running && tunnelState != .starting else {
             return (false, L("daemon.tunnel.alreadyRunning"))
         }

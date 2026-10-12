@@ -382,6 +382,18 @@ final class DaemonClient: ObservableObject {
         _ = sem.wait(timeout: .now() + timeout)
     }
 
+    /// Synchronously stop the tunnel (blocks up to timeout seconds). Used on app exit: the daemon
+    /// outlives the GUI, so without this the kernel routes, the utun interface and wireguard-go would
+    /// stay behind with nobody left to stop them.
+    func stopTunnelSync(timeout: TimeInterval = 8) {
+        guard let proxy = proxy() else { return }
+        let sem = DispatchSemaphore(value: 0)
+        proxy.stopTunnel { _, _ in sem.signal() }
+        _ = sem.wait(timeout: .now() + timeout)
+        tunnelState = .stopped
+        activeConfigName = nil
+    }
+
     /// Set "auto-start DNS proxy when starting the tunnel" and persist it.
     func setAutoStartDNS(_ enabled: Bool) {
         autoStartDNS = enabled

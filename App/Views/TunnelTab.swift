@@ -125,6 +125,11 @@ struct TunnelTab: View {
                 .settingsActionButton()
                 .disabled(selectedConfig == nil)
             }
+
+            Text(L("ui.tunnel.sharedNotice"))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(SettingsUI.panePadding)
         .frame(minWidth: SettingsUI.leftMinWidth,

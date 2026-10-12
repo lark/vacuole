@@ -97,6 +97,7 @@ public enum L10n {
         "ui.tunnel.importTitle": "Import WireGuard Config",
         "ui.tunnel.configNamePlaceholder": "Config name",
         "ui.tunnel.rename": "Rename",
+        "ui.tunnel.sharedNotice": "Configs are stored system-wide and shared by all users, including private keys. Use on a trusted single-user Mac.",
 
         // Domain sets
         "ui.domainSets.activated": "Active",
@@ -184,8 +185,7 @@ public enum L10n {
         "daemon.config.writeFailed": "Failed to write config file: %@",
         "daemon.config.notFound": "Config %@ not found",
         "daemon.config.deleteFailed": "Delete failed: %@",
-        "daemon.config.renameEmpty": "Config name cannot be empty",
-        "daemon.config.renameInvalid": "Config name cannot contain \"/\" or line breaks",
+        "daemon.config.invalidName": "Invalid config name (empty, or contains \"/\" or line breaks)",
         "daemon.config.renameExists": "A config named %@ already exists",
         "daemon.config.renameFailed": "Rename failed: %@",
         "daemon.config.readDirFailed": "Failed to read directory: %@",
@@ -273,6 +273,7 @@ public enum L10n {
         "ui.tunnel.importTitle": "导入 WireGuard 配置",
         "ui.tunnel.configNamePlaceholder": "配置名称",
         "ui.tunnel.rename": "重命名",
+        "ui.tunnel.sharedNotice": "配置存放于系统级目录、为所有用户共享（含私钥），请仅在可信的单用户 Mac 上使用。",
 
         // Domain sets
         "ui.domainSets.activated": "已激活",
@@ -360,8 +361,7 @@ public enum L10n {
         "daemon.config.writeFailed": "写入配置文件失败: %@",
         "daemon.config.notFound": "配置 %@ 不存在",
         "daemon.config.deleteFailed": "删除失败: %@",
-        "daemon.config.renameEmpty": "配置名称不能为空",
-        "daemon.config.renameInvalid": "配置名称不能包含“/”或换行",
+        "daemon.config.invalidName": "配置名称非法（为空，或包含“/”、换行）",
         "daemon.config.renameExists": "已存在名为 %@ 的配置",
         "daemon.config.renameFailed": "重命名失败: %@",
         "daemon.config.readDirFailed": "读取目录失败: %@",

@@ -34,6 +34,23 @@ To mitigate route bloating, Class C routes and route expiration are used.
   DNS). The two communicate over XPC.
 - **Tunnel** — uses bundled `wireguard-go` + `wg` directly; `wg-quick` is not used.
 
+## Multi-user behavior
+
+vacuole is designed for a **single-user Mac**:
+
+- **Configurations are not isolated per user.** They live in `/var/db/vacuole` (root-owned, mode 0600)
+  and are shared by every account, **including the WireGuard private keys**. Any user who can drive
+  the GUI sees the same configs, domain sets and upstream DNS.
+- **The tunnel is machine-wide.** It is installed as kernel routes plus a system DNS takeover, so once
+  it is up every user and process — including ssh logins — is affected. There is no per-user tunnel.
+- **Only root and the current console (GUI) user may talk to the daemon.** Connections from other
+  accounts are rejected, which keeps ssh logins from reading private keys or changing routes/DNS.
+- **Quitting the GUI tears the tunnel down.** The daemon outlives the GUI, so on quit the tunnel, its
+  routes and the DNS takeover are stopped to avoid leaving the machine captured with no way to undo it.
+
+If you need per-user isolation, run vacuole on a machine where every account is trusted, or use a
+separate tunnel manager per user.
+
 ## Requirements
 
 - macOS 13 or later.

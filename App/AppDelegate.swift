@@ -50,6 +50,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         false
     }
 
+    /// Tear the tunnel down on quit (menu quit, logout or shutdown). The daemon outlives the GUI, so
+    /// leaving the tunnel up would keep the machine's routes and DNS captured with nobody able to stop
+    /// it. Waiting synchronously here guarantees the daemon has finished before the process exits.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if DaemonClient.shared.tunnelState != .stopped {
+            DaemonClient.shared.stopTunnelSync()
+        }
+        DaemonClient.shared.stopDNSSync()
+        return .terminateNow
+    }
+
     // MARK: - Status bar item
 
     private func setupStatusItem() {
@@ -207,9 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func quit() {
-        // Synchronously wait for system DNS restoration before quitting, to avoid leaving 127.0.0.1
-        // pointing at a stopped proxy and causing network loss
-        DaemonClient.shared.stopDNSSync()
+        // The synchronous tunnel/DNS teardown happens in applicationShouldTerminate
         NSApp.terminate(nil)
     }
 
