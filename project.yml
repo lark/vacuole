@@ -1,0 +1,82 @@
+name: vacuole
+options:
+  bundleIdPrefix: com.vacuole
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGNING_ALLOWED: "NO"
+    ENABLE_HARDENED_RUNTIME: "NO"
+    ALWAYS_SEARCH_USER_PATHS: "NO"
+
+targets:
+  VacuoleShared:
+    type: framework
+    platform: macOS
+    sources:
+      - path: VacuoleShared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vacuole.shared
+        DEFINES_MODULE: "YES"
+        SKIP_INSTALL: "YES"
+        GENERATE_INFOPLIST_FILE: "YES"
+
+  vacuoled:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Daemon
+    dependencies:
+      - target: VacuoleShared
+    settings:
+      base:
+        PRODUCT_NAME: vacuoled
+        SKIP_INSTALL: "YES"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/../Frameworks"
+          - "@loader_path/../Frameworks"
+
+  vacuole:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+    dependencies:
+      - target: VacuoleShared
+        embed: true
+      - target: vacuoled
+    info:
+      path: Config/App-Info.plist
+      properties:
+        CFBundleName: vacuole
+        CFBundleDisplayName: vacuole
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "13.0"
+        LSUIElement: true
+        NSPrincipalClass: NSApplication
+    settings:
+      base:
+        PRODUCT_NAME: vacuole
+        PRODUCT_BUNDLE_IDENTIFIER: com.vacuole.app
+    postBuildScripts:
+      - name: Embed LaunchDaemon
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          DEST="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH"
+          mkdir -p "$DEST/Library/LaunchDaemons"
+          cp "$SRCROOT/Config/com.vacuole.daemon.plist" "$DEST/Library/LaunchDaemons/"
+          cp "$BUILT_PRODUCTS_DIR/vacuoled" "$DEST/MacOS/vacuoled"
+          echo "embedded daemon -> $DEST/MacOS/vacuoled"
