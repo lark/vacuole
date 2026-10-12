@@ -15,23 +15,36 @@
 import SwiftUI
 import VacuoleShared
 
-/// Domain Sets Tab: set management (left) + group & domain management (right)
-/// Features: search, add/remove, bulk file import, group enable toggles, activate set
+/// Which pane the right-hand side shows.
+private enum DomainDetailTab: String, Hashable {
+    case edit
+    case search
+}
+
+/// Domain Sets Tab: set management (left) + edit / search panes (right)
+/// Features: add/remove sets and groups, domain editing, file import/export, global search, activation
 struct DomainSetsTab: View {
     @ObservedObject private var client = DaemonClient.shared
+
+    /// Name of the auto-created fallback set, which is not renameable.
+    static let defaultSetName = "default"
 
     // Set-level state
     @State private var selectedSetID: UUID?
     @State private var newSetName: String = ""
+    /// Id of the set whose name is being renamed inline (nil when not renaming)
+    @State private var editingSetID: UUID?
+    @State private var editingSetDraft = ""
+    @FocusState private var setRenameFocused: Bool
 
-    // Group/domain-level state
+    // Right pane state
+    @State private var detailTab: DomainDetailTab = .edit
     @State private var newGroupName: String = ""
-    @State private var newDomain: String = ""
     @State private var searchText: String = ""
 
     // File import
-    @State private var showFileImporter = false
     @State private var pendingImportContent: String?
+    @State private var pendingImportGroupID: UUID?
 
     var body: some View {
         HSplitView {
@@ -43,24 +56,43 @@ struct DomainSetsTab: View {
 
                 List(selection: $selectedSetID) {
                     ForEach(client.domainSets) { set in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    Text(set.name).font(.body)
-                                    if set.id == client.activeSetID {
-                                        Text(L("ui.domainSets.activated"))
-                                            .font(.caption2)
-                                            .padding(.horizontal, 5)
-                                            .padding(.vertical, 1)
-                                            .background(.green.opacity(0.2))
-                                            .clipShape(Capsule())
+                        HStack(spacing: 6) {
+                            if editingSetID == set.id {
+                                TextField("", text: $editingSetDraft)
+                                    .textFieldStyle(.roundedBorder)
+                                    .focused($setRenameFocused)
+                                    .onSubmit { commitSetRename(set.id) }
+                                    .onExitCommand { editingSetID = nil }
+                            } else {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 6) {
+                                        Text(set.name).font(.body)
+                                        if set.id == client.activeSetID {
+                                            Text(L("ui.domainSets.activated"))
+                                                .font(.caption2)
+                                                .padding(.horizontal, 5)
+                                                .padding(.vertical, 1)
+                                                .background(.green.opacity(0.2))
+                                                .clipShape(Capsule())
+                                        }
                                     }
+                                    Text(L("ui.domainSets.groupDomainCount", set.groups.count, totalDomainCount(set)))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
-                                Text(L("ui.domainSets.groupDomainCount", set.groups.count, totalDomainCount(set)))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                Spacer(minLength: 0)
+                                // The auto-created "default" set keeps its name
+                                if set.name != Self.defaultSetName {
+                                    Button {
+                                        beginSetRename(set)
+                                    } label: {
+                                        Image(systemName: "pencil")
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .help(L("ui.domainSets.rename"))
+                                }
                             }
-                            Spacer()
                         }
                         .tag(set.id)
                     }
@@ -100,7 +132,7 @@ struct DomainSetsTab: View {
                    idealWidth: SettingsUI.leftIdealWidth,
                    maxWidth: SettingsUI.leftMaxWidth)
 
-            // ── Right: groups and domains ──
+            // ── Right: edit / search ──
             if let idx = client.domainSets.firstIndex(where: { $0.id == selectedSetID }) {
                 DomainSetDetailView(
                     set: Binding(
@@ -108,11 +140,14 @@ struct DomainSetsTab: View {
                         set: { client.saveDomainSet($0) }
                     ),
                     isActive: client.domainSets[idx].id == client.activeSetID,
+                    allSets: client.domainSets,
+                    tab: $detailTab,
                     searchText: $searchText,
                     newGroupName: $newGroupName,
-                    newDomain: $newDomain,
                     onActivate: { client.activateDomainSet(id: client.domainSets[idx].id) },
-                    onImportFile: { showFileImporter = true }
+                    onImportFile: { groupID in importFromFile(into: groupID) },
+                    onExportFile: { exportSelectedSet() },
+                    onRemoveDomain: removeDomain(setID:groupID:domain:)
                 )
             } else {
                 VStack(spacing: 12) {
@@ -129,31 +164,20 @@ struct DomainSetsTab: View {
             }
         }
         .onAppear { client.refreshDomainSets() }
-        .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.plainText, .text]) { result in
-            switch result {
-            case .success(let url):
-                if url.startAccessingSecurityScopedResource() {
-                    defer { url.stopAccessingSecurityScopedResource() }
-                    if let content = try? String(contentsOf: url, encoding: .utf8) {
-                        pendingImportContent = content
-                    }
-                }
-            case .failure(let error):
-                client.reportError(error.localizedDescription)
-            }
-        }
         .sheet(isPresented: Binding(
             get: { pendingImportContent != nil },
             set: { if !$0 { pendingImportContent = nil } }
         )) {
             if let content = pendingImportContent {
                 ImportDomainsSheet(
-                    rawText: content,
                     groups: selectedSetGroups,
-                    onConfirm: { groupID, newGroupName, domains in
-                        applyImport(groupID: groupID, newGroupName: newGroupName, domains: domains)
+                    parsed: DomainFileParser.parse(content),
+                    preselectedGroupID: pendingImportGroupID,
+                    onConfirm: { plan in
+                        applyImport(plan)
                         pendingImportContent = nil
-                    }
+                    },
+                    onCancel: { pendingImportContent = nil }
                 )
             }
         }
@@ -164,32 +188,124 @@ struct DomainSetsTab: View {
         return set.groups.map { ($0.id, $0.name) }
     }
 
-    /// Apply bulk import: create a new group when groupID is nil and newGroupName is non-empty
-    private func applyImport(groupID: UUID?, newGroupName: String?, domains: [String]) {
-        guard let idx = client.domainSets.firstIndex(where: { $0.id == selectedSetID }) else { return }
+    private func totalDomainCount(_ set: DomainSet) -> Int {
+        set.groups.reduce(0) { $0 + $1.domains.count }
+    }
+
+    // MARK: - Set rename
+
+    /// Start inline rename: select the row, seed the draft and focus the field.
+    private func beginSetRename(_ set: DomainSet) {
+        selectedSetID = set.id
+        editingSetDraft = set.name
+        editingSetID = set.id
+        DispatchQueue.main.async { setRenameFocused = true }
+    }
+
+    private func commitSetRename(_ id: UUID) {
+        guard editingSetID == id else { return }
+        let newName = editingSetDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        editingSetID = nil
+        guard !newName.isEmpty,
+              let idx = client.domainSets.firstIndex(where: { $0.id == id }),
+              client.domainSets[idx].name != newName else { return }
         var set = client.domainSets[idx]
-
-        let targetGroupID: UUID
-        if let gid = groupID, set.groups.contains(where: { $0.id == gid }) {
-            targetGroupID = gid
-        } else {
-            let name = newGroupName?.trimmingCharacters(in: .whitespaces) ?? ""
-            let group = DomainGroup(name: name.isEmpty ? L("ui.action.import") : name)
-            set.groups.append(group)
-            targetGroupID = group.id
-        }
-
-        guard let gi = set.groups.firstIndex(where: { $0.id == targetGroupID }) else { return }
-        var merged = set.groups[gi].domains
-        for d in domains where !merged.contains(d) {
-            merged.append(d)
-        }
-        set.groups[gi].domains = merged
+        set.name = newName
         client.saveDomainSet(set)
     }
 
-    private func totalDomainCount(_ set: DomainSet) -> Int {
-        set.groups.reduce(0) { $0 + $1.domains.count }
+    // MARK: - File import / export
+
+    /// `groupID` preselects a group in the import sheet (the per-group import button passes its own).
+    private func importFromFile(into groupID: UUID?) {
+        do {
+            guard let file = try FileDialogs.openTextFile(title: L("ui.domainSets.importTitle")) else { return }
+            pendingImportGroupID = groupID
+            pendingImportContent = file.text
+        } catch {
+            client.reportError("\(L("ui.error.importFailed")): \(error.localizedDescription)")
+        }
+    }
+
+    private func exportSelectedSet() {
+        guard let set = client.domainSets.first(where: { $0.id == selectedSetID }) else { return }
+        guard set.groups.contains(where: { !$0.domains.isEmpty }) else {
+            client.reportError(L("ui.domainSets.exportEmpty"))
+            return
+        }
+        let fileName = set.name.replacingOccurrences(of: "/", with: "-") + ".txt"
+        do {
+            try FileDialogs.saveTextFile(title: L("ui.domainSets.exportToFile"),
+                                         suggestedName: fileName,
+                                         content: Self.exportText(for: set))
+        } catch {
+            client.reportError("\(L("ui.error.exportFailed")): \(error.localizedDescription)")
+        }
+    }
+
+    /// One domain per line with groups as `#` comments, so the file can be re-imported as-is.
+    private static func exportText(for set: DomainSet) -> String {
+        var lines = ["# vacuole domain set: \(set.name)"]
+        for group in set.groups {
+            guard !group.domains.isEmpty else { continue }
+            lines.append("")
+            lines.append("# \(group.name)\(group.enabled ? "" : " (disabled)")")
+            lines.append(contentsOf: group.domains.sorted())
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    // MARK: - Editing
+
+    /// Apply the plan chosen in the import sheet: either recreate the file's `#` groups, or drop
+    /// everything into a single group.
+    private func applyImport(_ plan: ImportPlan) {
+        guard let idx = client.domainSets.firstIndex(where: { $0.id == selectedSetID }) else { return }
+        var set = client.domainSets[idx]
+
+        switch plan {
+        case .grouped(let parsed):
+            for section in parsed.sections where !section.domains.isEmpty {
+                let name = section.groupName ?? L("ui.action.import")
+                let gi = groupIndex(named: name, in: &set, createEnabled: !section.groupDisabled)
+                merge(section.domains, into: &set.groups[gi].domains)
+            }
+        case .single(let groupID, let newGroupName, let domains):
+            let gi: Int
+            if let gid = groupID, let existing = set.groups.firstIndex(where: { $0.id == gid }) {
+                gi = existing
+            } else {
+                let name = (newGroupName ?? "").trimmingCharacters(in: .whitespaces)
+                set.groups.append(DomainGroup(name: name.isEmpty ? L("ui.action.import") : name))
+                gi = set.groups.count - 1
+            }
+            merge(domains, into: &set.groups[gi].domains)
+        }
+        client.saveDomainSet(set)
+    }
+
+    /// Index of the group with this name; a new group is appended when it does not exist yet
+    private func groupIndex(named name: String, in set: inout DomainSet, createEnabled: Bool) -> Int {
+        if let existing = set.groups.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) {
+            return existing
+        }
+        set.groups.append(DomainGroup(name: name, enabled: createEnabled))
+        return set.groups.count - 1
+    }
+
+    private func merge(_ domains: [String], into target: inout [String]) {
+        for domain in domains where !target.contains(domain) {
+            target.append(domain)
+        }
+    }
+
+    /// Remove a domain found through the global search, which may live in any set.
+    private func removeDomain(setID: UUID, groupID: UUID, domain: String) {
+        guard let si = client.domainSets.firstIndex(where: { $0.id == setID }) else { return }
+        var set = client.domainSets[si]
+        guard let gi = set.groups.firstIndex(where: { $0.id == groupID }) else { return }
+        set.groups[gi].domains.removeAll { $0 == domain }
+        client.saveDomainSet(set)
     }
 }
 
@@ -198,29 +314,35 @@ struct DomainSetsTab: View {
 private struct DomainSetDetailView: View {
     @Binding var set: DomainSet
     let isActive: Bool
+    let allSets: [DomainSet]
+    @Binding var tab: DomainDetailTab
     @Binding var searchText: String
     @Binding var newGroupName: String
-    @Binding var newDomain: String
     let onActivate: () -> Void
-    let onImportFile: () -> Void
+    let onImportFile: (UUID?) -> Void
+    let onExportFile: () -> Void
+    let onRemoveDomain: (UUID, UUID, String) -> Void
 
     var body: some View {
         VStack(spacing: 12) {
-            // Top: set name + search + activate button
+            // Top: set name + pane selector + activate button
             HStack {
                 TextField(L("ui.domainSets.setNamePlaceholder"), text: Binding(
                     get: { set.name },
                     set: { set.name = $0 }))
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 180)
+                    // The auto-created "default" set keeps its name
+                    .disabled(set.name == DomainSetsTab.defaultSetName)
+                    .help(set.name == DomainSetsTab.defaultSetName ? L("ui.domainSets.defaultLocked") : "")
 
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                    TextField(L("ui.domainSets.searchPlaceholder"), text: $searchText)
-                        .textFieldStyle(.roundedBorder)
+                Picker("", selection: $tab) {
+                    Text(L("ui.domainSets.tabEdit")).tag(DomainDetailTab.edit)
+                    Text(L("ui.domainSets.tabSearch")).tag(DomainDetailTab.search)
                 }
-                .frame(maxWidth: 200)
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 160)
 
                 Spacer()
 
@@ -234,18 +356,29 @@ private struct DomainSetDetailView: View {
                 }
             }
 
-            // Group management
-            GroupBox(L("ui.domainSets.groups")) {
+            switch tab {
+            case .edit:
+                editor
+            case .search:
+                DomainSearchView(sets: allSets, query: $searchText, onRemove: onRemoveDomain)
+            }
+        }
+        .padding(SettingsUI.panePadding)
+        .frame(minWidth: 520)
+    }
+
+    private var editor: some View {
+        VStack(spacing: 12) {
+            GroupBox {
                 ScrollView {
                     VStack(spacing: 10) {
                         ForEach($set.groups) { $group in
                             GroupRowView(
                                 group: $group,
-                                searchText: searchText,
                                 onDelete: {
                                     set.groups.removeAll { $0.id == group.id }
                                 },
-                                onImportFile: onImportFile
+                                onImportFile: { onImportFile(group.id) }
                             )
                             Divider()
                         }
@@ -268,12 +401,134 @@ private struct DomainSetDetailView: View {
                     }
                     .padding(8)
                 }
+            } label: {
+                HStack {
+                    Text(L("ui.domainSets.groups"))
+                    Spacer()
+                    Button {
+                        onImportFile(nil)
+                    } label: {
+                        Label(L("ui.domainSets.importFromFile"), systemImage: "square.and.arrow.down")
+                    }
+                    .settingsActionButton()
+                    Button {
+                        onExportFile()
+                    } label: {
+                        Label(L("ui.domainSets.exportToFile"), systemImage: "square.and.arrow.up")
+                    }
+                    .settingsActionButton()
+                }
             }
 
             Spacer(minLength: 0)
         }
-        .padding(SettingsUI.panePadding)
-        .frame(minWidth: 520)
+    }
+}
+
+// MARK: - Global domain search
+
+private struct DomainSearchView: View {
+    let sets: [DomainSet]
+    @Binding var query: String
+    let onRemove: (UUID, UUID, String) -> Void
+
+    private struct Match: Identifiable {
+        let id: String
+        let domain: String
+        let setName: String
+        let groupName: String
+        let setID: UUID
+        let groupID: UUID
+        /// True when the row is listed because the group name matched, not the domain itself
+        let viaGroup: Bool
+    }
+
+    /// Domains matching the keyword, plus every domain of a group whose name matches.
+    /// A domain reached through its group is listed once and flagged, never twice.
+    private var matches: [Match] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return [] }
+        var found: [Match] = []
+        for set in sets {
+            for group in set.groups {
+                let groupMatched = group.name.lowercased().contains(q)
+                for domain in group.domains where groupMatched || domain.contains(q) {
+                    found.append(Match(id: "\(set.id)|\(group.id)|\(domain)",
+                                       domain: domain,
+                                       setName: set.name,
+                                       groupName: group.name,
+                                       setID: set.id,
+                                       groupID: group.id,
+                                       viaGroup: groupMatched))
+                }
+            }
+        }
+        return found.sorted { $0.domain < $1.domain }
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField(L("ui.domainSets.searchPlaceholder"), text: $query)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            if query.trimmingCharacters(in: .whitespaces).isEmpty {
+                Spacer()
+                Text(L("ui.domainSets.searchAllHint"))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            } else if matches.isEmpty {
+                Spacer()
+                Text(L("ui.domainSets.noMatch"))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L("ui.domainSets.searchResultCount", matches.count))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if matches.contains(where: { $0.viaGroup }) {
+                        Text(L("ui.domainSets.searchGroupHint"))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                List(matches) { match in
+                    HStack(spacing: 8) {
+                        Text(match.domain)
+                            .font(.system(.caption, design: .monospaced))
+                        Spacer()
+                        Text(match.setName)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        // The group name carries its own background so group-name matches stand out
+                        Text(match.groupName)
+                            .font(.caption2)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(match.viaGroup ? Color.accentColor.opacity(0.22)
+                                                       : Color.gray.opacity(0.12))
+                            .clipShape(Capsule())
+                        Button {
+                            onRemove(match.setID, match.groupID, match.domain)
+                        } label: {
+                            Image(systemName: "xmark.circle")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+                .listStyle(.inset)
+                .frame(maxHeight: .infinity)
+            }
+        }
     }
 }
 
@@ -281,7 +536,6 @@ private struct DomainSetDetailView: View {
 
 private struct GroupRowView: View {
     @Binding var group: DomainGroup
-    let searchText: String
     let onDelete: () -> Void
     let onImportFile: () -> Void
     @State private var newDomain: String = ""
@@ -321,11 +575,11 @@ private struct GroupRowView: View {
                     .disabled(newDomain.trimmingCharacters(in: .whitespaces).isEmpty)
             }
 
-            // Domain list (filtered by search; truncated to 20 when longer)
-            let filtered = filteredDomains
-            if !filtered.isEmpty {
+            // Domain list (first 20 shown; the Search pane covers the rest)
+            let shown = shownDomains
+            if !shown.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(filtered, id: \.self) { domain in
+                    ForEach(shown, id: \.self) { domain in
                         HStack {
                             Text(domain)
                                 .font(.system(.caption, design: .monospaced))
@@ -341,8 +595,8 @@ private struct GroupRowView: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 1)
                     }
-                    if group.domains.count > filtered.count {
-                        Text(L("ui.domainSets.moreHidden", group.domains.count - filtered.count))
+                    if group.domains.count > shown.count {
+                        Text(L("ui.domainSets.moreHidden", group.domains.count - shown.count))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 8)
@@ -355,17 +609,12 @@ private struct GroupRowView: View {
         .padding(6)
     }
 
-    private var filteredDomains: [String] {
-        let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
-        let all = group.domains.sorted()
-        guard !q.isEmpty else { return Array(all.prefix(20)) }
-        return all.filter { $0.contains(q) }
+    private var shownDomains: [String] {
+        Array(group.domains.sorted().prefix(20))
     }
 
     private func addDomain() {
-        var d = newDomain.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !d.isEmpty else { return }
-        if !d.hasSuffix(".") { d += "." }
+        guard let d = DomainFileParser.normalizedDomain(newDomain) else { return }
         guard !group.domains.contains(d) else {
             newDomain = ""
             return
@@ -382,53 +631,94 @@ private struct GroupRowView: View {
 // MARK: - Bulk import sheet
 
 private struct ImportDomainsSheet: View {
-    let rawText: String
     let groups: [(UUID, String)]
-    /// groupID = nil means create a new group (use newGroupName)
-    let onConfirm: (UUID?, String?, [String]) -> Void
+    let onConfirm: (ImportPlan) -> Void
+    let onCancel: () -> Void
 
+    /// How a file that carries `#` group markers is applied
+    private enum Mode: String, Hashable {
+        case grouped
+        case single
+    }
+
+    private let parsed: DomainFileParser.Result
+
+    @State private var mode: Mode
     @State private var selectedGroupID: UUID?
     @State private var newGroupName: String = ""
 
-    private var parsed: [String] {
-        Self.parseDomains(rawText)
+    init(groups: [(UUID, String)],
+         parsed: DomainFileParser.Result,
+         preselectedGroupID: UUID?,
+         onConfirm: @escaping (ImportPlan) -> Void,
+         onCancel: @escaping () -> Void) {
+        self.groups = groups
+        self.parsed = parsed
+        self.onConfirm = onConfirm
+        self.onCancel = onCancel
+        // A file carrying `#` group markers defaults to importing those groups as they are
+        _mode = State(initialValue: parsed.hasGroups ? .grouped : .single)
+        _selectedGroupID = State(initialValue: preselectedGroupID)
     }
 
     var body: some View {
         VStack(spacing: 12) {
             Text(L("ui.domainSets.importTitle")).font(.headline)
-            Text(L("ui.domainSets.parsedCount", parsed.count))
+            Text(L("ui.domainSets.parsedCount", parsed.domains.count))
                 .font(.callout)
                 .foregroundStyle(.secondary)
+            if parsed.invalidLines > 0 {
+                Text(L("ui.domainSets.importFiltered", parsed.invalidLines))
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
 
-            HStack {
-                Picker(L("ui.domainSets.importToGroup"), selection: $selectedGroupID) {
-                    Text(L("ui.domainSets.newGroupOption")).tag(UUID?.none)
-                    ForEach(groups, id: \.0) { id, name in
-                        Text(name).tag(UUID?.some(id))
-                    }
+            if parsed.hasGroups {
+                Picker("", selection: $mode) {
+                    Text(L("ui.domainSets.importModeGrouped", parsed.groupNames.count)).tag(Mode.grouped)
+                    Text(L("ui.domainSets.importModeSingle")).tag(Mode.single)
                 }
-                if selectedGroupID == nil {
-                    TextField(L("ui.domainSets.groupNamePlaceholder"), text: $newGroupName)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 140)
+                .pickerStyle(.radioGroup)
+                .labelsHidden()
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if !parsed.hasGroups || mode == .single {
+                HStack {
+                    Picker(L("ui.domainSets.importToGroup"), selection: $selectedGroupID) {
+                        Text(L("ui.domainSets.newGroupOption")).tag(UUID?.none)
+                        ForEach(groups, id: \.0) { id, name in
+                            Text(name).tag(UUID?.some(id))
+                        }
+                    }
+                    if selectedGroupID == nil {
+                        TextField(L("ui.domainSets.groupNamePlaceholder"), text: $newGroupName)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 140)
+                    }
                 }
             }
 
             ScrollView {
-                Text(parsed.joined(separator: "\n"))
+                Text(previewText)
                     .font(.system(.caption2, design: .monospaced))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(height: 180)
 
             HStack {
-                Button(L("ui.action.cancel")) { onConfirm(nil, nil, []) }
+                Button(L("ui.action.cancel")) { onCancel() }
                 Spacer()
                 Button(L("ui.action.import")) {
-                    onConfirm(selectedGroupID, selectedGroupID == nil ? newGroupName : nil, parsed)
+                    if parsed.hasGroups, mode == .grouped {
+                        onConfirm(.grouped(parsed))
+                    } else {
+                        onConfirm(.single(groupID: selectedGroupID,
+                                          newGroupName: selectedGroupID == nil ? newGroupName : nil,
+                                          domains: parsed.domains))
+                    }
                 }
-                .disabled(parsed.isEmpty)
+                .disabled(parsed.domains.isEmpty)
                 .buttonStyle(.borderedProminent)
             }
         }
@@ -436,24 +726,123 @@ private struct ImportDomainsSheet: View {
         .frame(width: 460, height: 400)
     }
 
-    /// Parse domain list: supports one domain per line, hosts format (IP domain), # comments
-    static func parseDomains(_ text: String) -> [String] {
+    /// Preview of what will be imported, capped so an oversized file cannot stall the sheet
+    private var previewText: String {
+        let lines = parsed.previewText.split(separator: "\n", omittingEmptySubsequences: false)
+        let limit = 400
+        guard lines.count > limit else { return parsed.previewText }
+        return lines.prefix(limit).joined(separator: "\n")
+            + "\n" + L("ui.domainSets.importPreviewMore", lines.count - limit)
+    }
+}
+
+// MARK: - Import plan
+
+/// What the import sheet decided to do with the parsed file.
+private enum ImportPlan {
+    /// Recreate the `#` groups found in the file, merging into groups that already exist
+    case grouped(DomainFileParser.Result)
+    /// Put every parsed domain into a single group
+    case single(groupID: UUID?, newGroupName: String?, domains: [String])
+}
+
+// MARK: - Domain list file parsing
+
+/// Parses domain list files: one domain per line, optional `#` group markers, hosts-format lines.
+private enum DomainFileParser {
+
+    struct Section {
+        let groupName: String?
+        let groupDisabled: Bool
+        let domains: [String]
+    }
+
+    struct Result {
+        let sections: [Section]
+        let invalidLines: Int
+
+        var domains: [String] { sections.flatMap { $0.domains } }
+        var groupNames: [String] { sections.compactMap { $0.groupName } }
+        var hasGroups: Bool { !groupNames.isEmpty }
+
+        /// Everything that will be imported, in file order
+        var previewText: String {
+            var lines: [String] = []
+            for section in sections where !section.domains.isEmpty {
+                if let name = section.groupName {
+                    if !lines.isEmpty { lines.append("") }
+                    lines.append("# \(name)\(section.groupDisabled ? " (disabled)" : "")")
+                }
+                lines.append(contentsOf: section.domains)
+            }
+            return lines.joined(separator: "\n")
+        }
+    }
+
+    /// Characters allowed in a domain entry. Anything else — spaces, slashes, control characters
+    /// and the like — makes the line invalid, so a malformed or hostile file cannot push arbitrary
+    /// text into the routing and DNS layers.
+    private static let allowedCharacters = Set("abcdefghijklmnopqrstuvwxyz0123456789-.*_")
+
+    static func parse(_ text: String) -> Result {
+        var sections: [Section] = []
+        var currentName: String?
+        var currentDisabled = false
+        var currentDomains: [String] = []
         var seen = Set<String>()
-        var result: [String] = []
+        var invalidLines = 0
+
+        func flush() {
+            guard !currentDomains.isEmpty else { return }
+            sections.append(Section(groupName: currentName,
+                                    groupDisabled: currentDisabled,
+                                    domains: currentDomains))
+            currentDomains = []
+        }
+
         for rawLine in text.split(separator: "\n") {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.isEmpty || line.hasPrefix("#") { continue }
+            if line.isEmpty { continue }
+
+            if line.hasPrefix("#") {
+                let comment = String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
+                // Skip empty comments and the header our own export writes
+                if comment.isEmpty || comment.lowercased().hasPrefix("vacuole domain set:") { continue }
+                var name = comment
+                var disabled = false
+                if name.lowercased().hasSuffix("(disabled)") {
+                    disabled = true
+                    name = String(name.dropLast("(disabled)".count)).trimmingCharacters(in: .whitespaces)
+                }
+                flush()
+                currentName = name.isEmpty ? nil : name
+                currentDisabled = disabled
+                continue
+            }
+
+            // Hosts format ("1.2.3.4 domain") keeps the second field, otherwise the whole line
             let parts = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
             let candidate = parts.count >= 2 ? String(parts[1]) : String(parts.first ?? "")
-            var d = candidate.lowercased()
-            if d.hasSuffix(".") { d = String(d.dropLast()) }
-            guard !d.isEmpty, d.contains(".") else { continue }
-            d += "."
-            if !seen.contains(d) {
-                seen.insert(d)
-                result.append(d)
+            guard let domain = normalizedDomain(candidate) else {
+                invalidLines += 1
+                continue
+            }
+            if seen.insert(domain).inserted {
+                currentDomains.append(domain)
             }
         }
-        return result
+        flush()
+        return Result(sections: sections, invalidLines: invalidLines)
+    }
+
+    /// Normalize one entry, or return nil when it is not a plausible domain
+    static func normalizedDomain(_ candidate: String) -> String? {
+        var domain = candidate.trimmingCharacters(in: .whitespaces).lowercased()
+        if domain.hasSuffix(".") { domain = String(domain.dropLast()) }
+        guard !domain.isEmpty, domain.count <= 253 else { return nil }
+        guard domain.allSatisfy({ allowedCharacters.contains($0) }) else { return nil }
+        guard domain.contains("."), !domain.hasPrefix("."), !domain.contains("..") else { return nil }
+        guard domain.split(separator: ".").allSatisfy({ !$0.isEmpty && $0.count <= 63 }) else { return nil }
+        return domain + "."
     }
 }

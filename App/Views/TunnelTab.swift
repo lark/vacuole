@@ -249,17 +249,10 @@ struct TunnelTab: View {
 
     /// Import a config from a file chosen by the user.
     private func openConfigFromFile() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        // WireGuard configs may have any name: accept .conf, plain text and other files.
-        panel.allowedContentTypes = [UTType(filenameExtension: "conf"), .plainText, .data].compactMap { $0 }
-        guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let content = try String(contentsOf: url, encoding: .utf8)
-            importingName = url.deletingPathExtension().lastPathComponent
-            importingContent = content
+            guard let file = try FileDialogs.openTextFile(title: L("ui.tunnel.importTitle")) else { return }
+            importingName = file.url.deletingPathExtension().lastPathComponent
+            importingContent = file.text
             showImportSheet = true
         } catch {
             client.reportError(error.localizedDescription)
