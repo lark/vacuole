@@ -96,6 +96,7 @@ public enum L10n {
         "ui.tunnel.selectConfigHint": "Select a config on the left, or import a new one",
         "ui.tunnel.importTitle": "Import WireGuard Config",
         "ui.tunnel.configNamePlaceholder": "Config name",
+        "ui.tunnel.rename": "Rename",
 
         // Domain sets
         "ui.domainSets.activated": "Active",
@@ -164,6 +165,7 @@ public enum L10n {
         "ui.error.xpcProxy": "Failed to create XPC proxy",
         "ui.error.importFailed": "Import failed",
         "ui.error.deleteFailed": "Delete failed",
+        "ui.error.renameFailed": "Rename failed",
         "ui.error.startFailed": "Start failed",
         "ui.error.stopFailed": "Stop failed",
         "ui.error.addFailed": "Add failed",
@@ -182,6 +184,10 @@ public enum L10n {
         "daemon.config.writeFailed": "Failed to write config file: %@",
         "daemon.config.notFound": "Config %@ not found",
         "daemon.config.deleteFailed": "Delete failed: %@",
+        "daemon.config.renameEmpty": "Config name cannot be empty",
+        "daemon.config.renameInvalid": "Config name cannot contain \"/\" or line breaks",
+        "daemon.config.renameExists": "A config named %@ already exists",
+        "daemon.config.renameFailed": "Rename failed: %@",
         "daemon.config.readDirFailed": "Failed to read directory: %@",
         "daemon.config.encodeFailed": "Encoding failed",
         "daemon.tunnel.alreadyRunning": "Tunnel is already running or starting",
@@ -266,6 +272,7 @@ public enum L10n {
         "ui.tunnel.selectConfigHint": "从左侧选择一个配置，或导入新配置",
         "ui.tunnel.importTitle": "导入 WireGuard 配置",
         "ui.tunnel.configNamePlaceholder": "配置名称",
+        "ui.tunnel.rename": "重命名",
 
         // Domain sets
         "ui.domainSets.activated": "已激活",
@@ -334,6 +341,7 @@ public enum L10n {
         "ui.error.xpcProxy": "无法创建 XPC 代理",
         "ui.error.importFailed": "导入失败",
         "ui.error.deleteFailed": "删除失败",
+        "ui.error.renameFailed": "重命名失败",
         "ui.error.startFailed": "启动失败",
         "ui.error.stopFailed": "停止失败",
         "ui.error.addFailed": "添加失败",
@@ -352,6 +360,10 @@ public enum L10n {
         "daemon.config.writeFailed": "写入配置文件失败: %@",
         "daemon.config.notFound": "配置 %@ 不存在",
         "daemon.config.deleteFailed": "删除失败: %@",
+        "daemon.config.renameEmpty": "配置名称不能为空",
+        "daemon.config.renameInvalid": "配置名称不能包含“/”或换行",
+        "daemon.config.renameExists": "已存在名为 %@ 的配置",
+        "daemon.config.renameFailed": "重命名失败: %@",
         "daemon.config.readDirFailed": "读取目录失败: %@",
         "daemon.config.encodeFailed": "编码失败",
         "daemon.tunnel.alreadyRunning": "隧道已在运行或启动中",

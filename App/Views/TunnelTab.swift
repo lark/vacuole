@@ -14,6 +14,7 @@
 
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import VacuoleShared
 
 /// Tunnel / Config Tab: WG config import (drag / paste / file picker), list, start/stop
@@ -21,11 +22,14 @@ struct TunnelTab: View {
     @ObservedObject private var client = DaemonClient.shared
     @State private var selectedConfig: String?
     @State private var showImportSheet = false
-    @State private var showFilePicker = false
     @State private var importingName: String = ""
     @State private var importingContent: String = ""
     /// Whether the private key in the config preview is revealed
     @State private var revealKey = false
+    /// Name of the config currently being renamed inline (nil when not renaming)
+    @State private var editingName: String?
+    @State private var editingDraft = ""
+    @FocusState private var renameFocused: Bool
 
     var body: some View {
         HSplitView {
@@ -50,20 +54,6 @@ struct TunnelTab: View {
                 }
             )
         }
-        .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.plainText]) { result in
-            switch result {
-            case .success(let url):
-                if url.startAccessingSecurityScopedResource(),
-                   let content = try? String(contentsOf: url, encoding: .utf8) {
-                    importingName = url.deletingPathExtension().lastPathComponent
-                    importingContent = content
-                    url.stopAccessingSecurityScopedResource()
-                    showImportSheet = true
-                }
-            case .failure(let error):
-                client.reportError(error.localizedDescription)
-            }
-        }
     }
 
     // MARK: - Left pane: config list
@@ -75,12 +65,31 @@ struct TunnelTab: View {
                 .foregroundStyle(.secondary)
 
             List(client.configs, selection: $selectedConfig) { item in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.name).font(.body)
-                    if item.name == client.activeConfigName {
-                        Text(L("ui.status.running"))
-                            .font(.caption)
-                            .foregroundStyle(.green)
+                HStack(spacing: 6) {
+                    if editingName == item.name {
+                        TextField("", text: $editingDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .focused($renameFocused)
+                            .onSubmit { commitRename(from: item.name) }
+                            .onExitCommand { editingName = nil }
+                    } else {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.name).font(.body)
+                            if item.name == client.activeConfigName {
+                                Text(L("ui.status.running"))
+                                    .font(.caption)
+                                    .foregroundStyle(.green)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                        Button {
+                            beginRename(item.name)
+                        } label: {
+                            Image(systemName: "pencil")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help(L("ui.tunnel.rename"))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -92,14 +101,14 @@ struct TunnelTab: View {
                 Button {
                     showImportSheet = true
                 } label: {
-                    Label(L("ui.action.import"), systemImage: "plus.circle")
+                    actionLabel(L("ui.action.import"), "plus.circle")
                 }
                 .settingsActionButton()
 
                 Button {
-                    showFilePicker = true
+                    openConfigFromFile()
                 } label: {
-                    Label(L("ui.tunnel.importFromFile"), systemImage: "doc.badge.plus")
+                    actionLabel(L("ui.tunnel.importFromFile"), "doc.badge.plus")
                 }
                 .settingsActionButton()
 
@@ -111,7 +120,7 @@ struct TunnelTab: View {
                         selectedConfig = nil
                     }
                 } label: {
-                    Label(L("ui.action.delete"), systemImage: "trash")
+                    actionLabel(L("ui.action.delete"), "trash")
                 }
                 .settingsActionButton()
                 .disabled(selectedConfig == nil)
@@ -138,9 +147,8 @@ struct TunnelTab: View {
                     }
                     .frame(maxHeight: .infinity)
                 } label: {
-                    HStack {
+                    HStack(spacing: 6) {
                         Text(L("ui.tunnel.configContent"))
-                        Spacer(minLength: 0)
                         Button {
                             revealKey.toggle()
                         } label: {
@@ -149,6 +157,7 @@ struct TunnelTab: View {
                         }
                         .buttonStyle(.borderless)
                         .help(revealKey ? L("ui.tunnel.hideKey") : L("ui.tunnel.revealKey"))
+                        Spacer(minLength: 0)
                     }
                 }
 
@@ -157,14 +166,14 @@ struct TunnelTab: View {
                         Button(role: .destructive) {
                             client.stopTunnel()
                         } label: {
-                            Label(L("ui.tunnel.stop"), systemImage: "stop.fill")
+                            actionLabel(L("ui.tunnel.stop"), "stop.fill")
                         }
                         .settingsActionButton()
                     } else {
                         Button {
                             client.startTunnel(configName: name)
                         } label: {
-                            Label(L("ui.tunnel.start"), systemImage: "play.fill")
+                            actionLabel(L("ui.tunnel.start"), "play.fill")
                         }
                         .settingsActionButton()
                         .disabled(client.tunnelState == .starting || client.tunnelState == .stopping)
@@ -201,6 +210,55 @@ struct TunnelTab: View {
             return String(line[...eq]) + " ••••••••••••••••"
         }
         .joined(separator: "\n")
+    }
+
+    /// Label with a fixed icon box so every action button has the same height.
+    private func actionLabel(_ title: String, _ symbol: String) -> some View {
+        Label {
+            Text(title)
+        } icon: {
+            Image(systemName: symbol)
+                .frame(width: 16, height: 16)
+        }
+    }
+
+    /// Start inline rename: select the row, seed the draft and focus the field.
+    private func beginRename(_ name: String) {
+        selectedConfig = name
+        editingDraft = name
+        editingName = name
+        DispatchQueue.main.async { renameFocused = true }
+    }
+
+    /// Commit the inline rename. The daemon owns the files and the menu bar is rebuilt from its
+    /// config list / active config, so refreshing the client keeps everything in sync.
+    private func commitRename(from oldName: String) {
+        guard editingName == oldName else { return }
+        let newName = editingDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        editingName = nil
+        guard !newName.isEmpty, newName != oldName else { return }
+        client.renameConfig(from: oldName, to: newName) { ok in
+            if ok, selectedConfig == oldName { selectedConfig = newName }
+        }
+    }
+
+    /// Import a config from a file chosen by the user.
+    private func openConfigFromFile() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        // WireGuard configs may have any name: accept .conf, plain text and other files.
+        panel.allowedContentTypes = [UTType(filenameExtension: "conf"), .plainText, .data].compactMap { $0 }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let content = try String(contentsOf: url, encoding: .utf8)
+            importingName = url.deletingPathExtension().lastPathComponent
+            importingContent = content
+            showImportSheet = true
+        } catch {
+            client.reportError(error.localizedDescription)
+        }
     }
 }
 

@@ -90,6 +90,38 @@ final class WireGuardController {
         }
     }
 
+    /// Rename a config file, keeping `activeConfigName` in sync when it points at the renamed config.
+    func renameConfig(from oldName: String, to newName: String) -> (Bool, String?) {
+        let new = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !new.isEmpty else {
+            return (false, L("daemon.config.renameEmpty"))
+        }
+        guard !new.contains("/"), !new.contains("\n"), !new.contains("\r") else {
+            return (false, L("daemon.config.renameInvalid"))
+        }
+        guard new != oldName else { return (true, nil) }
+
+        let dir = VacuoleDaemonConstants.configsDir
+        let src = "\(dir)/\(oldName).conf"
+        let dst = "\(dir)/\(new).conf"
+        guard FileManager.default.fileExists(atPath: src) else {
+            return (false, L("daemon.config.notFound", oldName))
+        }
+        guard !FileManager.default.fileExists(atPath: dst) else {
+            return (false, L("daemon.config.renameExists", new))
+        }
+        do {
+            try FileManager.default.moveItem(atPath: src, toPath: dst)
+        } catch {
+            return (false, L("daemon.config.renameFailed", error.localizedDescription))
+        }
+        // Keep the daemon's active-config pointer in sync so the status/menu show the new name
+        if activeConfigName == oldName {
+            activeConfigName = new
+        }
+        return (true, nil)
+    }
+
     struct ConfigEntry: Codable {
         let name: String
         let rawConfig: String

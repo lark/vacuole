@@ -70,6 +70,11 @@ final class DaemonService: NSObject, VacuoleDaemonProtocol {
         reply(result.0, result.1)
     }
 
+    func renameConfig(_ oldName: String, to newName: String, withReply reply: @escaping (Bool, String?) -> Void) {
+        let result = wg.renameConfig(from: oldName, to: newName)
+        reply(result.0, result.1)
+    }
+
     func listConfigs(withReply reply: @escaping (Data?, String?) -> Void) {
         let result = wg.listConfigs()
         reply(result.0, result.1)

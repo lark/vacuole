@@ -186,6 +186,22 @@ final class DaemonClient: ObservableObject {
         }
     }
 
+    /// Rename a config. The daemon owns the files, so on success both the config list and the status
+    /// are refreshed, which also updates the menu bar (it is rebuilt from `configs` / `activeConfigName`).
+    func renameConfig(from oldName: String, to newName: String, completion: ((Bool) -> Void)? = nil) {
+        proxy()?.renameConfig(oldName, to: newName) { [weak self] ok, err in
+            Task { @MainActor in
+                if ok {
+                    self?.refreshConfigs()
+                    self?.refreshStatus()
+                } else {
+                    self?.lastError = err ?? L("ui.error.renameFailed")
+                }
+                completion?(ok)
+            }
+        }
+    }
+
     // MARK: - Tunnel control
 
     func startTunnel(configName: String) {

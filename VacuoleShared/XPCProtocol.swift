@@ -39,6 +39,8 @@ public enum VacuoleDaemonConstants {
     func importConfig(_ name: String, rawConfig: String, withReply reply: @escaping (Bool, String?) -> Void)
     /// Delete a WG config.
     func deleteConfig(_ name: String, withReply reply: @escaping (Bool, String?) -> Void)
+    /// Rename a WG config.
+    func renameConfig(_ oldName: String, to newName: String, withReply reply: @escaping (Bool, String?) -> Void)
     /// List all saved WG configs (JSON-encoded [WireGuardConfig]).
     func listConfigs(withReply reply: @escaping (Data?, String?) -> Void)
 
