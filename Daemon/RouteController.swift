@@ -67,6 +67,8 @@ final class RouteController {
         var v6: Bool
         var expires: Date?     // nil = permanent (static / upstream)
         var source: String     // "dns" / "static" / "upstream"
+        /// Domains that pulled this route in (key: domain, value: time it was first added)
+        var origins: [String: Date] = [:]
     }
     private var entries: [String: Entry] = [:]   // key: dest CIDR, e.g. "10.0.0.0/24"
 
@@ -144,9 +146,10 @@ final class RouteController {
 
     // MARK: - Public operations
 
-    /// A target hit by DNS resolution: aggregate to /24 (or /64), install it, and refresh the TTL
+    /// A target hit by DNS resolution: aggregate to /24 (or /64), install it, and refresh the TTL.
+    /// `origin` is the queried domain, recorded so the UI can show why the route exists.
     @discardableResult
-    func addResolved(_ ip: String) -> (Bool, String?) {
+    func addResolved(_ ip: String, origin: String? = nil) -> (Bool, String?) {
         queue.sync {
             guard interfaceName != nil else { return (false, L("daemon.route.tunnelNotRunning")) }
             guard let parsed = parseIP(ip) else { return (false, L("daemon.route.invalidIP", ip)) }
@@ -170,7 +173,7 @@ final class RouteController {
                 dest = cidr(parsed.bytes, v6: parsed.v6, plen: hostPlen)
             }
             let expires = Date().addingTimeInterval(routeTTL)
-            return addRouteLocked(dest: dest, v6: parsed.v6, expires: expires, source: "dns")
+            return addRouteLocked(dest: dest, v6: parsed.v6, expires: expires, source: "dns", origin: origin)
         }
     }
 
@@ -180,8 +183,21 @@ final class RouteController {
         queue.sync {
             guard interfaceName != nil else { return (false, L("daemon.route.tunnelNotRunning")) }
             guard let parsed = parseIP(ip) else { return (false, L("daemon.route.invalidIP", ip)) }
-            let plen = parsed.v6 ? 128 : 32
-            let dest = cidr(parsed.bytes, v6: parsed.v6, plen: plen)
+
+            // Never point the physical DNS (protected) or a directly connected LAN address at the tunnel:
+            // non-matched lookups are forwarded to the physical DNS, and tunneling it would black-hole them.
+            if protectedIPs.contains(ip) {
+                LogStore.shared.warn("route", "Upstream DNS \(ip) is a protected address; leaving it outside the tunnel")
+                return (false, nil)
+            }
+            let hostPlen = parsed.v6 ? 128 : 32
+            let host = Subnet(bytes: parsed.bytes, plen: hostPlen, v6: parsed.v6)
+            if localSubnets.contains(where: { overlaps(host, $0) }) {
+                LogStore.shared.warn("route", "Upstream DNS \(ip) is on a directly connected subnet; leaving it outside the tunnel")
+                return (false, nil)
+            }
+
+            let dest = cidr(parsed.bytes, v6: parsed.v6, plen: hostPlen)
             return addRouteLocked(dest: dest, v6: parsed.v6, expires: nil, source: source)
         }
     }
@@ -249,9 +265,19 @@ final class RouteController {
 
     // MARK: - Queries
 
-    /// DNS-hit (aggregated) route prefixes
-    func listResolvedRoutes() -> [String] {
-        queue.sync { entries.filter { $0.value.source == "dns" }.keys.sorted() }
+    /// DNS-hit (aggregated) routes with their origin domains and expiry
+    func listResolvedRoutes() -> [ResolvedRouteInfo] {
+        queue.sync {
+            entries.filter { $0.value.source == "dns" }
+                .map { dest, entry in
+                    ResolvedRouteInfo(dest: dest,
+                                      origins: entry.origins
+                                          .map { RouteOrigin(domain: $0.key, addedAt: $0.value) }
+                                          .sorted { $0.addedAt < $1.addedAt },
+                                      expiresAt: entry.expires)
+                }
+                .sorted { $0.dest < $1.dest }
+        }
     }
 
     /// Static route entries
@@ -266,12 +292,13 @@ final class RouteController {
 
     // MARK: - Route install/remove (must be called on the queue)
 
-    private func addRouteLocked(dest: String, v6: Bool, expires: Date?, source: String) -> (Bool, String?) {
+    private func addRouteLocked(dest: String, v6: Bool, expires: Date?, source: String, origin: String? = nil) -> (Bool, String?) {
         guard let iface = interfaceName else { return (false, L("daemon.route.tunnelNotRunning")) }
 
-        // Already exists: just refresh the expiry
+        // Already exists: refresh the expiry and remember the extra origin
         if var e = entries[dest] {
             e.expires = expires
+            if let origin { recordOrigin(origin, in: &e) }
             entries[dest] = e
             persistLocked()
             return (true, nil)
@@ -294,10 +321,23 @@ final class RouteController {
             LogStore.shared.error("route", "Failed to install route \(dest): \(msg)")
             return (false, msg)
         }
-        entries[dest] = Entry(v6: v6, expires: expires, source: source)
+        var entry = Entry(v6: v6, expires: expires, source: source)
+        if let origin { recordOrigin(origin, in: &entry) }
+        entries[dest] = entry
         persistLocked()
         LogStore.shared.info("route", "Installed route \(dest) → \(iface) [\(source)]")
         return (true, nil)
+    }
+
+    /// Remember which domain pulled this route in. Only the newest origins are kept, so a busy
+    /// /24 reused by many host names cannot grow the entry without bound.
+    private func recordOrigin(_ domain: String, in entry: inout Entry) {
+        let key = domain.lowercased()
+        guard entry.origins[key] == nil else { return }
+        if entry.origins.count >= 16, let oldest = entry.origins.min(by: { $0.value < $1.value })?.key {
+            entry.origins.removeValue(forKey: oldest)
+        }
+        entry.origins[key] = Date()
     }
 
     private func removeRouteLocked(dest: String, v6: Bool) {

@@ -7,7 +7,8 @@ using your normal network.
 ## Features
 
 - **Menu bar control** — start/stop the tunnel and switch domain sets from the status bar.
-- **Domain sets** — group domains (wildcards supported) into sets and activate one at a time.
+- **Domain sets** — group domains into sets and activate one at a time. A bare entry
+  (`example.com`) covers the domain and all of its subdomains; `*.example.com` covers subdomains only.
 - **Transparent DNS proxy** — captures the system's physical DNS, resolves matched domains
   through the tunnel, and forwards the rest to the physical DNS. Configurable upstream DNS.
 - **Automatic split routing** — DNS-resolved IPs are aggregated (IPv4 `/24`, IPv6 `/64`) into

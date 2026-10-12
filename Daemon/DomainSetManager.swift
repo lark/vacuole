@@ -142,11 +142,12 @@ final class DomainSetManager {
         return (true, nil)
     }
 
-    /// After the tunnel (re)starts, re-apply the domains and static routes of the currently active domain set
+    /// After the tunnel (re)starts, re-apply the domains and static routes of the currently active domain set.
+    /// Uses applyActive so the flattened domain list is rebuilt: the DNS proxy keeps no state across daemon
+    /// restarts, and syncing the (then empty) cached list left every domain unmatched.
     func reapplyActiveRoutes() {
         guard let id = activeSetID, let set = sets.first(where: { $0.id == id }) else { return }
-        syncDomainsToDNS()
-        _ = RouteController.shared.replaceStatic(set.staticRoutes)
+        _ = applyActive(set)
     }
 
     private func syncDomainsToDNS() {

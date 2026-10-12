@@ -88,6 +88,34 @@ public struct DomainSetListEnvelope: Codable, Sendable {
     }
 }
 
+/// The domain that pulled a route in through DNS, and when it first did so.
+public struct RouteOrigin: Codable, Sendable, Hashable {
+    public var domain: String
+    public var addedAt: Date
+
+    public init(domain: String, addedAt: Date) {
+        self.domain = domain
+        self.addedAt = addedAt
+    }
+}
+
+/// A DNS-matched (aggregated) route as reported by the daemon.
+public struct ResolvedRouteInfo: Codable, Sendable, Hashable, Identifiable {
+    public var dest: String
+    /// Domains that caused this route, oldest first; empty when the origin was not recorded.
+    public var origins: [RouteOrigin]
+    /// nil when the route never expires
+    public var expiresAt: Date?
+
+    public var id: String { dest }
+
+    public init(dest: String, origins: [RouteOrigin] = [], expiresAt: Date? = nil) {
+        self.dest = dest
+        self.origins = origins
+        self.expiresAt = expiresAt
+    }
+}
+
 /// Runtime state snapshot of the daemon.
 public struct DaemonStatus: Codable, Sendable {
     public var tunnelState: TunnelState

@@ -30,7 +30,7 @@ final class DaemonClient: ObservableObject {
     @Published var configs: [ConfigListItem] = []
 
     // P2: split-routing routes (DNS-hit aggregated prefixes + static CIDRs)
-    @Published private(set) var resolvedRoutes: [String] = []
+    @Published private(set) var resolvedRoutes: [ResolvedRouteInfo] = []
     @Published private(set) var staticRoutes: [String] = []
     @Published private(set) var routingActive = false
     @Published private(set) var routeTTL: Double = 600
@@ -255,8 +255,8 @@ final class DaemonClient: ObservableObject {
 
     func refreshRoutes() {
         proxy()?.listResolvedRoutes { [weak self] data, _ in
-            guard let data, let ips = try? JSONDecoder().decode([String].self, from: data) else { return }
-            Task { @MainActor in self?.resolvedRoutes = ips }
+            guard let data, let routes = try? JSONDecoder().decode([ResolvedRouteInfo].self, from: data) else { return }
+            Task { @MainActor in self?.resolvedRoutes = routes }
         }
         proxy()?.listStaticRoutes { [weak self] data, _ in
             guard let data, let cidrs = try? JSONDecoder().decode([String].self, from: data) else { return }
