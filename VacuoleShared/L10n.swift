@@ -59,6 +59,7 @@ public enum L10n {
         "ui.menu.switchDomainSet": "Switch Domain Set",
         "ui.menu.openSettings": "Open Settings…",
         "ui.menu.reconnectDaemon": "Reconnect Daemon",
+        "ui.menu.flushDNS": "Flush DNS Cache",
         "ui.menu.quit": "Quit vacuole",
 
         // Common actions / status
@@ -181,6 +182,7 @@ public enum L10n {
         "ui.error.xpcProxy": "Failed to create XPC proxy",
         "ui.error.importFailed": "Import failed",
         "ui.error.exportFailed": "Export failed",
+        "ui.error.flushDNSFailed": "Failed to flush the DNS cache",
         "ui.error.deleteFailed": "Delete failed",
         "ui.error.renameFailed": "Rename failed",
         "ui.error.startFailed": "Start failed",
@@ -251,6 +253,7 @@ public enum L10n {
         "ui.menu.switchDomainSet": "切换域名集",
         "ui.menu.openSettings": "打开设置…",
         "ui.menu.reconnectDaemon": "重新连接守护进程",
+        "ui.menu.flushDNS": "刷新 DNS 缓存",
         "ui.menu.quit": "退出 vacuole",
 
         // Common actions / status
@@ -373,6 +376,7 @@ public enum L10n {
         "ui.error.xpcProxy": "无法创建 XPC 代理",
         "ui.error.importFailed": "导入失败",
         "ui.error.exportFailed": "导出失败",
+        "ui.error.flushDNSFailed": "刷新 DNS 缓存失败",
         "ui.error.deleteFailed": "删除失败",
         "ui.error.renameFailed": "重命名失败",
         "ui.error.startFailed": "启动失败",

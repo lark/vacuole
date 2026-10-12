@@ -130,6 +130,17 @@ final class DaemonClient: ObservableObject {
         lastError = msg
     }
 
+    /// Flush the system DNS resolver cache. The daemon does the work because the flush commands
+    /// need root; the CLI used depends on the running macOS version.
+    func flushDNSCache(completion: ((Bool) -> Void)? = nil) {
+        proxy()?.flushDNSCache { [weak self] ok, err in
+            Task { @MainActor in
+                if !ok { self?.reportError(err ?? L("ui.error.flushDNSFailed")) }
+                completion?(ok)
+            }
+        }
+    }
+
     private func proxy() -> VacuoleDaemonProtocol? {
         connection?.remoteObjectProxy as? VacuoleDaemonProtocol
     }

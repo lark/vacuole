@@ -182,6 +182,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        // ── Tools ──
+        menu.addItem(actionItem(L("ui.menu.flushDNS"), #selector(flushDNSCache)))
+
+        menu.addItem(.separator())
+
         menu.addItem(actionItem(L("ui.menu.quit"), #selector(quit), key: "q"))
     }
 
@@ -215,6 +220,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func reconnectDaemon() {
         DaemonClient.shared.connect()
+    }
+
+    /// Flush the resolver cache through the daemon (the commands need root).
+    @objc private func flushDNSCache() {
+        DaemonClient.shared.flushDNSCache()
     }
 
     @objc private func quit() {

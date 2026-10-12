@@ -82,6 +82,8 @@ public enum VacuoleDaemonConstants {
     func setUpstreamDNS(_ servers: String, withReply reply: @escaping (Bool, String?) -> Void)
     /// Set where the upstream DNS comes from: "tunnel" (DNS declared by the active WG config) or "custom".
     func setUpstreamMode(_ mode: String, withReply reply: @escaping (Bool, String?) -> Void)
+    /// Flush the macOS DNS resolver cache (the command depends on the macOS version).
+    func flushDNSCache(withReply reply: @escaping (Bool, String?) -> Void)
 
     // ── P4: domain set management ──
     /// List all domain sets + the currently active ID (JSON: DomainSetListEnvelope).

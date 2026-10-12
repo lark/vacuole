@@ -188,6 +188,13 @@ final class DaemonService: NSObject, VacuoleDaemonProtocol {
         }
     }
 
+    func flushDNSCache(withReply reply: @escaping (Bool, String?) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let failure = DNSCacheFlusher.flush()
+            reply(failure == nil, failure)
+        }
+    }
+
     func dnsStatus(withReply reply: @escaping (Data?, String?) -> Void) {
         let status: [String: Any] = [
             "running": dns.running,
