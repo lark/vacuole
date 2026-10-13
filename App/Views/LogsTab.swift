@@ -33,7 +33,7 @@ struct LogsTab: View {
                 Button {
                     client.refreshLogs()
                 } label: {
-                    Label(L("ui.action.refresh"), systemImage: "arrow.clockwise")
+                    SettingsActionLabel(title: L("ui.action.refresh"), systemImage: "arrow.clockwise")
                 }
                 .settingsActionButton()
             }

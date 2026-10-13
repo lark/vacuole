@@ -25,7 +25,7 @@ import VacuoleShared
 struct SettingsTabsView: View {
 
     private enum Tab: String, CaseIterable, Identifiable {
-        case tunnel, domainSets, staticRoutes, network, logs
+        case tunnel, domainSets, network, staticRoutes, logs
 
         var id: String { rawValue }
 
@@ -86,6 +86,28 @@ extension View {
     /// Uniform look for action buttons across settings panes (same height and style).
     func settingsActionButton() -> some View {
         self.buttonStyle(.bordered).controlSize(.regular)
+    }
+}
+
+/// Label for a pane's action button, with a fixed icon box.
+///
+/// SF Symbols have different ink heights (`doc.badge.plus` hangs low, `play.fill` is compact) and the
+/// button bezel is drawn around the content, so buttons sitting next to each other end up a pixel or
+/// two different in height. Scaling every symbol into the same box keeps a button row perfectly even;
+/// `scaledToFit` preserves each symbol's own aspect ratio.
+struct SettingsActionLabel: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        Label {
+            Text(title)
+        } icon: {
+            Image(systemName: systemImage)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 16, height: 14)
+        }
     }
 }
 

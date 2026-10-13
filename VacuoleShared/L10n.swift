@@ -62,6 +62,15 @@ public enum L10n {
         "ui.menu.flushDNS": "Flush DNS Cache",
         "ui.menu.quit": "Quit vacuole",
 
+        // Edit menu (invisible for an accessory app, but it carries the standard key equivalents)
+        "ui.menu.edit": "Edit",
+        "ui.menu.undo": "Undo",
+        "ui.menu.redo": "Redo",
+        "ui.menu.cut": "Cut",
+        "ui.menu.copy": "Copy",
+        "ui.menu.paste": "Paste",
+        "ui.menu.selectAll": "Select All",
+
         // Common actions / status
         "ui.action.import": "Import",
         "ui.action.delete": "Delete",
@@ -80,8 +89,8 @@ public enum L10n {
         "ui.tab.tunnel": "Tunnel",
         "ui.tab.domainSets": "Domain Sets",
         "ui.tab.staticRoutes": "Static Routes",
-        "ui.tab.network": "Network / DNS",
-        "ui.tab.logs": "Status / Logs",
+        "ui.tab.network": "DNS",
+        "ui.tab.logs": "Logs",
 
         // Tunnel
         "ui.tunnel.start": "Start Tunnel",
@@ -98,6 +107,8 @@ public enum L10n {
         "ui.tunnel.importTitle": "Import WireGuard Config",
         "ui.tunnel.configNamePlaceholder": "Config name",
         "ui.tunnel.rename": "Rename",
+        // Product name: identical in every language, so it lives only in the fallback table
+        "ui.tunnel.amneziaBadge": "AmneziaWG",
         "ui.tunnel.sharedNotice": "Configs are stored system-wide and shared by all users, including private keys. Use on a trusted single-user Mac.",
 
         // Domain sets
@@ -109,6 +120,7 @@ public enum L10n {
         "ui.domainSets.selectSetHint": "Select or create a domain set on the left",
         "ui.domainSets.setNamePlaceholder": "Set name",
         "ui.domainSets.rename": "Rename",
+        "ui.domainSets.deleteSet": "Delete this domain set",
         "ui.domainSets.defaultLocked": "The default domain set cannot be renamed",
         "ui.domainSets.searchPlaceholder": "Search domains (global)",
         "ui.domainSets.tabEdit": "Edit",
@@ -266,6 +278,15 @@ public enum L10n {
         "ui.menu.flushDNS": "刷新 DNS 缓存",
         "ui.menu.quit": "退出 vacuole",
 
+        // Edit menu (invisible for an accessory app, but it carries the standard key equivalents)
+        "ui.menu.edit": "编辑",
+        "ui.menu.undo": "撤销",
+        "ui.menu.redo": "重做",
+        "ui.menu.cut": "剪切",
+        "ui.menu.copy": "拷贝",
+        "ui.menu.paste": "粘贴",
+        "ui.menu.selectAll": "全选",
+
         // Common actions / status
         "ui.action.import": "导入",
         "ui.action.delete": "删除",
@@ -284,8 +305,8 @@ public enum L10n {
         "ui.tab.tunnel": "隧道",
         "ui.tab.domainSets": "域名集",
         "ui.tab.staticRoutes": "静态路由",
-        "ui.tab.network": "网络 / DNS",
-        "ui.tab.logs": "状态 / 日志",
+        "ui.tab.network": "DNS",
+        "ui.tab.logs": "日志",
 
         // Tunnel
         "ui.tunnel.start": "启动隧道",
@@ -313,6 +334,7 @@ public enum L10n {
         "ui.domainSets.selectSetHint": "从左侧选择或新建一个域名集",
         "ui.domainSets.setNamePlaceholder": "集合名称",
         "ui.domainSets.rename": "重命名",
+        "ui.domainSets.deleteSet": "删除此域名集",
         "ui.domainSets.defaultLocked": "默认域名集不可重命名",
         "ui.domainSets.searchPlaceholder": "搜索域名（全局）",
         "ui.domainSets.tabEdit": "修改",

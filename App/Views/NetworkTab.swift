@@ -54,19 +54,23 @@ struct NetworkTab: View {
                         Button(role: .destructive) {
                             client.stopDNS()
                         } label: {
-                            Label(L("ui.network.stopDNS"), systemImage: "stop.fill")
+                            SettingsActionLabel(title: L("ui.network.stopDNS"), systemImage: "stop.fill")
                         }
                         .settingsActionButton()
                     } else {
                         Button {
                             client.startDNS()
                         } label: {
-                            Label(L("ui.network.startDNS"), systemImage: "play.fill")
+                            SettingsActionLabel(title: L("ui.network.startDNS"), systemImage: "play.fill")
                         }
                         .settingsActionButton()
                     }
-                    Button(L("ui.action.refresh")) { client.refreshDNSStatus() }
-                        .settingsActionButton()
+                    Button {
+                        client.refreshDNSStatus()
+                    } label: {
+                        SettingsActionLabel(title: L("ui.action.refresh"), systemImage: "arrow.clockwise")
+                    }
+                    .settingsActionButton()
                 }
 
                 Toggle(L("ui.network.autoStartDNS"), isOn: Binding(

@@ -73,15 +73,17 @@ struct TunnelTab: View {
                             .onSubmit { commitRename(from: item.name) }
                             .onExitCommand { editingName = nil }
                     } else {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.name).font(.body)
-                            if item.name == client.activeConfigName {
-                                Text(L("ui.status.running"))
-                                    .font(.caption)
-                                    .foregroundStyle(.green)
-                            }
+                        Text(item.name).font(.body)
+                        // Inline so the row height stays constant whether the config is active or not
+                        if item.name == client.activeConfigName {
+                            Text(L("ui.status.running"))
+                                .font(.caption)
+                                .foregroundStyle(.green)
                         }
                         Spacer(minLength: 0)
+                        if amneziaConfigNames.contains(item.name) {
+                            amneziaBadge
+                        }
                         Button {
                             beginRename(item.name)
                         } label: {
@@ -93,9 +95,17 @@ struct TunnelTab: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .listRowSeparator(.hidden)
                 .tag(item.name)
             }
             .listStyle(.inset)
+
+            // Notice above the buttons, so the button row is this pane's last element and lines up
+            // with the start/stop row at the bottom of the right pane
+            Text(L("ui.tunnel.sharedNotice"))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 8) {
                 Button {
@@ -125,11 +135,6 @@ struct TunnelTab: View {
                 .settingsActionButton()
                 .disabled(selectedConfig == nil)
             }
-
-            Text(L("ui.tunnel.sharedNotice"))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(SettingsUI.panePadding)
         .frame(minWidth: SettingsUI.leftMinWidth,
@@ -204,6 +209,21 @@ struct TunnelTab: View {
         .frame(maxWidth: .infinity)
     }
 
+    /// Configs carrying AmneziaWG settings, tagged in the list. Uses the same parser rule as the
+    /// daemon's engine selection, so a tag always means the tunnel will run on amneziawg-go.
+    private var amneziaConfigNames: Set<String> {
+        Set(client.configs.filter { WGConfigParser.parse($0.rawConfig).isAmnezia }.map(\.name))
+    }
+
+    private var amneziaBadge: some View {
+        Text(L("ui.tunnel.amneziaBadge"))
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .overlay(Capsule().stroke(Color.secondary.opacity(0.4), lineWidth: 1))
+    }
+
     /// Mask the `PrivateKey` value unless the user explicitly reveals it.
     private func maskedConfig(_ raw: String) -> String {
         guard !revealKey else { return raw }
@@ -219,12 +239,7 @@ struct TunnelTab: View {
 
     /// Label with a fixed icon box so every action button has the same height.
     private func actionLabel(_ title: String, _ symbol: String) -> some View {
-        Label {
-            Text(title)
-        } icon: {
-            Image(systemName: symbol)
-                .frame(width: 16, height: 16)
-        }
+        SettingsActionLabel(title: title, systemImage: symbol)
     }
 
     /// Start inline rename: select the row, seed the draft and focus the field.
@@ -274,7 +289,11 @@ private struct ImportSheet: View {
             TextField(L("ui.tunnel.configNamePlaceholder"), text: $name).textFieldStyle(.roundedBorder)
             TextEditor(text: $content)
                 .font(.system(.caption, design: .monospaced))
-                .border(Color.gray.opacity(0.3))
+                .scrollContentBackground(.hidden)
+                // A few pixels of inner margin, so the text does not sit right against the border
+                .padding(6)
+                .background(Color(nsColor: .textBackgroundColor))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.gray.opacity(0.3), lineWidth: 1))
                 .frame(minHeight: 200)
             HStack {
                 Button(L("ui.action.cancel"), action: onCancel)

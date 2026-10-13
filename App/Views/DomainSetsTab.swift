@@ -92,8 +92,21 @@ struct DomainSetsTab: View {
                                     .buttonStyle(.borderless)
                                     .help(L("ui.domainSets.rename"))
                                 }
+                                // Delete lives on the row instead of a toolbar button, so it always
+                                // targets the set the user is pointing at
+                                Button {
+                                    client.deleteDomainSet(id: set.id)
+                                    if selectedSetID == set.id { selectedSetID = nil }
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .foregroundStyle(.red)
+                                }
+                                .buttonStyle(.borderless)
+                                .help(L("ui.domainSets.deleteSet"))
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .listRowSeparator(.hidden)
                         .tag(set.id)
                     }
                 }
@@ -102,29 +115,17 @@ struct DomainSetsTab: View {
                 HStack {
                     TextField(L("ui.domainSets.newSetNamePlaceholder"), text: $newSetName)
                         .textFieldStyle(.roundedBorder)
-                    Button {
+                    // Plain text button: an icon here would sit next to the row's own icons and
+                    // look inconsistent (and symbols of different ink heights break the row height)
+                    Button(L("ui.action.add")) {
                         let name = newSetName.trimmingCharacters(in: .whitespaces)
                         guard !name.isEmpty else { return }
                         let set = DomainSet(name: name)
                         client.saveDomainSet(set)
                         selectedSetID = set.id
                         newSetName = ""
-                    } label: {
-                        Image(systemName: "plus")
                     }
-                    .settingsActionButton()
                     .disabled(newSetName.trimmingCharacters(in: .whitespaces).isEmpty)
-
-                    Button {
-                        if let id = selectedSetID {
-                            client.deleteDomainSet(id: id)
-                            selectedSetID = nil
-                        }
-                    } label: {
-                        Image(systemName: "trash")
-                    }
-                    .settingsActionButton()
-                    .disabled(selectedSetID == nil)
                 }
             }
             .padding(SettingsUI.panePadding)
@@ -163,7 +164,13 @@ struct DomainSetsTab: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .onAppear { client.refreshDomainSets() }
+        .onAppear {
+            client.refreshDomainSets()
+            selectFallbackSetIfNeeded()
+        }
+        // The sets arrive asynchronously over XPC, so the fallback selection also has to run once
+        // the list is populated (on the first appearance it can still be empty)
+        .onChange(of: client.domainSets) { _ in selectFallbackSetIfNeeded() }
         .sheet(isPresented: Binding(
             get: { pendingImportContent != nil },
             set: { if !$0 { pendingImportContent = nil } }
@@ -190,6 +197,15 @@ struct DomainSetsTab: View {
 
     private func totalDomainCount(_ set: DomainSet) -> Int {
         set.groups.reduce(0) { $0 + $1.domains.count }
+    }
+
+    /// Entering the pane with nothing selected preselects the `default` set (or the first one),
+    /// so the user does not have to click first to see any content.
+    private func selectFallbackSetIfNeeded() {
+        guard selectedSetID == nil else { return }
+        let sets = client.domainSets
+        guard !sets.isEmpty else { return }
+        selectedSetID = (sets.first { $0.name == Self.defaultSetName } ?? sets[0]).id
     }
 
     // MARK: - Set rename
@@ -368,6 +384,9 @@ private struct DomainSetDetailView: View {
     }
 
     private var editor: some View {
+        // The group box holds a scrolling content area, so it must be the only flexible child here.
+        // A trailing Spacer would share the leftover height with it and leave the box hovering above
+        // the pane's bottom instead of ending at the usual 14pt margin.
         VStack(spacing: 12) {
             GroupBox {
                 ScrollView {
@@ -387,13 +406,11 @@ private struct DomainSetDetailView: View {
                         HStack {
                             TextField(L("ui.domainSets.newGroupNamePlaceholder"), text: $newGroupName)
                                 .textFieldStyle(.roundedBorder)
-                            Button {
+                            Button(L("ui.action.add")) {
                                 let name = newGroupName.trimmingCharacters(in: .whitespaces)
                                 guard !name.isEmpty else { return }
                                 set.groups.append(DomainGroup(name: name))
                                 newGroupName = ""
-                            } label: {
-                                Image(systemName: "plus")
                             }
                             .disabled(newGroupName.trimmingCharacters(in: .whitespaces).isEmpty)
                         }
@@ -408,19 +425,19 @@ private struct DomainSetDetailView: View {
                     Button {
                         onImportFile(nil)
                     } label: {
-                        Label(L("ui.domainSets.importFromFile"), systemImage: "square.and.arrow.down")
+                        SettingsActionLabel(title: L("ui.domainSets.importFromFile"),
+                                            systemImage: "square.and.arrow.down")
                     }
                     .settingsActionButton()
                     Button {
                         onExportFile()
                     } label: {
-                        Label(L("ui.domainSets.exportToFile"), systemImage: "square.and.arrow.up")
+                        SettingsActionLabel(title: L("ui.domainSets.exportToFile"),
+                                            systemImage: "square.and.arrow.up")
                     }
                     .settingsActionButton()
                 }
             }
-
-            Spacer(minLength: 0)
         }
     }
 }

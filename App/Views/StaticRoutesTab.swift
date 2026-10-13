@@ -46,7 +46,12 @@ struct StaticRoutesTab: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button(L("ui.action.refresh")) { client.refreshRoutes() }
+                Button {
+                    client.refreshRoutes()
+                } label: {
+                    SettingsActionLabel(title: L("ui.action.refresh"), systemImage: "arrow.clockwise")
+                }
+                .settingsActionButton()
             }
 
             HSplitView {

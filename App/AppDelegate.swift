@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
+        setupEditMenu()
         observeTunnelState()
         DaemonClient.shared.connect()
     }
@@ -59,6 +60,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         DaemonClient.shared.stopDNSSync()
         return .terminateNow
+    }
+
+    // MARK: - Main menu
+
+    /// An accessory (menu-bar only) app shows no menu bar, and we never installed a main menu, so the
+    /// standard editing shortcuts had no target at all: ⌘C/⌘V/⌘A/⌘Z did nothing in text fields while
+    /// right-click still worked (that menu is built by AppKit's text view itself). Installing an Edit
+    /// menu gives those key equivalents a responder-chain target; it is never displayed.
+    private func setupEditMenu() {
+        let mainMenu = NSMenu()
+        let editMenu = NSMenu(title: L("ui.menu.edit"))
+        editMenu.addItem(withTitle: L("ui.menu.undo"), action: Selector(("undo:")), keyEquivalent: "z")
+        // An uppercase key equivalent means ⇧⌘Z
+        editMenu.addItem(withTitle: L("ui.menu.redo"), action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: L("ui.menu.cut"), action: Selector(("cut:")), keyEquivalent: "x")
+        editMenu.addItem(withTitle: L("ui.menu.copy"), action: Selector(("copy:")), keyEquivalent: "c")
+        editMenu.addItem(withTitle: L("ui.menu.paste"), action: Selector(("paste:")), keyEquivalent: "v")
+        editMenu.addItem(withTitle: L("ui.menu.selectAll"), action: Selector(("selectAll:")), keyEquivalent: "a")
+
+        let editItem = NSMenuItem()
+        editItem.submenu = editMenu
+        mainMenu.addItem(editItem)
+        NSApplication.shared.mainMenu = mainMenu
     }
 
     // MARK: - Status bar item
