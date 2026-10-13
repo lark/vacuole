@@ -29,6 +29,10 @@ RouteController.shared.resetStaleState()
 // removed by the kernel on exit), avoiding the stale state where "the app has not
 // started a tunnel yet the tunnel interface still exists and targets remain reachable".
 WireGuardController.shared.cleanupOrphaned()
+// Startup fallback 3: a previous run (crash, forced quit, failed restore) may have left the system
+// DNS pointed at 127.0.0.1 with no proxy listening. Put automatic DNS back so the machine is not
+// left without working DNS.
+SystemDNSManager.shared.restoreIfLeftBehind()
 
 // Graceful-exit fallback: when launchd stops/restarts this daemon (e.g. `launchctl bootout`,
 // `kickstart -k`) it sends SIGTERM. Restore system DNS and reclaim routes first, avoiding a

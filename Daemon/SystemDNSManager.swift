@@ -96,19 +96,61 @@ final class SystemDNSManager {
         return (true, nil)
     }
 
-    /// Restore system DNS to the pre-capture value
+    /// Restore system DNS to the pre-capture value.
+    /// Every service is verified: if any `networksetup` call fails, takeover is kept marked as
+    /// active so a later stop/exit retries, and the caller is told the truth instead of a
+    /// success that would leave 127.0.0.1 behind and take the whole machine offline.
     func restore() -> (Bool, String?) {
         guard activated else { return (true, nil) }
 
         let services = listActiveNetworkServices()
+        guard !services.isEmpty else {
+            return (false, L("daemon.dns.noActiveService"))
+        }
+
+        var failures: [String] = []
         for service in services {
             // "empty" clears custom DNS and restores DHCP auto-configuration
-            _ = Shell.run("/usr/sbin/networksetup", args: ["-setdnsservers", service, "empty"])
+            if case .failure(let err) = Shell.run("/usr/sbin/networksetup", args: ["-setdnsservers", service, "empty"]) {
+                failures.append("\(service): \(err.message)")
+            }
+        }
+
+        guard failures.isEmpty else {
+            let msg = failures.joined(separator: "; ")
+            LogStore.shared.error("dns", "System DNS restore failed: \(msg)")
+            return (false, msg)
         }
 
         activated = false
+        capturedDNS = []
         LogStore.shared.info("dns", "System DNS restored")
         return (true, nil)
+    }
+
+    /// Startup self-heal: if a previous run left the system pointing at 127.0.0.1 but no DNS proxy
+    /// is listening (crash, forced quit, failed restore), put automatic DNS back so the machine is
+    /// not left without working DNS. Returns whether a fix-up was performed.
+    @discardableResult
+    func restoreIfLeftBehind() -> Bool {
+        let result = ShellCapture.run("/usr/sbin/scutil", args: ["--dns"])
+        guard case .success(let output) = result else { return false }
+
+        let stillTaken = output.split(separator: "\n").contains { line in
+            let s = line.trimmingCharacters(in: .whitespaces)
+            return s.hasPrefix("nameserver[") && s.contains("127.0.0.1")
+        }
+        guard stillTaken else { return false }
+
+        let services = listActiveNetworkServices()
+        guard !services.isEmpty else { return false }
+        for service in services {
+            _ = Shell.run("/usr/sbin/networksetup", args: ["-setdnsservers", service, "empty"])
+        }
+        activated = false
+        capturedDNS = []
+        LogStore.shared.warn("dns", "Leftover 127.0.0.1 DNS from a previous run detected; automatic DNS restored")
+        return true
     }
 
     // MARK: - Internals
@@ -135,6 +177,8 @@ enum Shell {
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = pipe
+        // Detach stdin: without an explicit value the child can inherit a bad fd and posix_spawn fails with EBADF
+        proc.standardInput = FileHandle.nullDevice
         do {
             try proc.run()
             proc.waitUntilExit()
@@ -158,6 +202,8 @@ enum ShellCapture {
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = pipe
+        // Detach stdin: without an explicit value the child can inherit a bad fd and posix_spawn fails with EBADF
+        proc.standardInput = FileHandle.nullDevice
         do {
             try proc.run()
             proc.waitUntilExit()

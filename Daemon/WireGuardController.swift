@@ -328,6 +328,8 @@ final class WireGuardController {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: path)
         proc.arguments = ["-f", "utun"]
+        // Detach stdin: without an explicit value the child can inherit a bad fd and posix_spawn fails with EBADF
+        proc.standardInput = FileHandle.nullDevice
 
         // Use WG_TUN_NAME_FILE to have wireguard-go report the real interface name (more reliable than parsing stdout)
         let nameFile = "/var/run/wireguard/vacuole.name"
@@ -496,6 +498,8 @@ final class WireGuardController {
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = pipe
+        // Detach stdin: without an explicit value the child can inherit a bad fd and posix_spawn fails with EBADF
+        proc.standardInput = FileHandle.nullDevice
         do {
             try proc.run()
             proc.waitUntilExit()
@@ -517,6 +521,8 @@ final class WireGuardController {
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = pipe
+        // Detach stdin: without an explicit value the child can inherit a bad fd and posix_spawn fails with EBADF
+        proc.standardInput = FileHandle.nullDevice
         do {
             try proc.run()
             proc.waitUntilExit()

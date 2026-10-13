@@ -549,6 +549,8 @@ final class RouteController {
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = pipe
+        // Detach stdin: without an explicit value the child can inherit a bad fd and posix_spawn fails with EBADF
+        proc.standardInput = FileHandle.nullDevice
         do {
             try proc.run()
             proc.waitUntilExit()

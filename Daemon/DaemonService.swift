@@ -101,7 +101,19 @@ final class DaemonService: NSObject, VacuoleDaemonProtocol {
 
     func stopTunnel(withReply reply: @escaping (Bool, String?) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            // First reclaim all routes installed by this controller
+            // Release the DNS takeover first: the tunnel (and its upstream) is going away, and leaving
+            // the machine pointed at 127.0.0.1 with a dead proxy would take DNS (and thus the network) down.
+            if self.dns.running || self.sysDNS.activated {
+                let restoreResult = self.sysDNS.restore()
+                if restoreResult.0 {
+                    self.dns.stop()
+                } else {
+                    // Restore failed: keep the proxy listening so 127.0.0.1 still resolves instead of
+                    // leaving the machine with no working DNS.
+                    LogStore.shared.error("dns", "Restoring system DNS while stopping the tunnel failed; keeping the DNS proxy running: \(restoreResult.1 ?? "")")
+                }
+            }
+            // Then reclaim all routes installed by this controller
             self.route.stop()
             let result = self.wg.stopTunnel()
             // The tunnel is gone: drop the tunnel-provided DNS so the upstream falls back to the default list
@@ -181,7 +193,14 @@ final class DaemonService: NSObject, VacuoleDaemonProtocol {
     func stopDNS(withReply reply: @escaping (Bool, String?) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             // 1. Restore system DNS
-            _ = self.sysDNS.restore()
+            let restoreResult = self.sysDNS.restore()
+            if !restoreResult.0 {
+                // Keep the proxy listening: cancelling it now would leave the machine pointed at a dead
+                // 127.0.0.1 resolver and take DNS down entirely.
+                LogStore.shared.error("dns", "System DNS restore failed; keeping the DNS proxy running: \(restoreResult.1 ?? "")")
+                reply(false, L("daemon.dns.takeoverFailed", restoreResult.1 ?? ""))
+                return
+            }
             // 2. Stop the DNS proxy listener
             self.dns.stop()
             reply(true, nil)

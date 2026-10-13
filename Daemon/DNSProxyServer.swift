@@ -32,6 +32,35 @@ final class DNSProxyServer {
     private(set) var running = false
     private var listenPort: NWEndpoint.Port = 53
 
+    /// Whether the proxy is *supposed* to run. Guards against a failed listener being
+    /// restarted after stop(), and lets a transient listener failure self-heal.
+    private var shouldRun = false
+
+    /// Per-query upstream timeout. Without it, a dead upstream leaves both the client and
+    /// upstream `NWConnection` objects alive forever, exhausting file descriptors.
+    private static let queryTimeout: TimeInterval = 5
+
+    /// Upper bound on concurrent in-flight queries; beyond it new queries are dropped
+    /// rather than piling up connections.
+    private static let maxInFlight = 256
+
+    private let inFlightLock = NSLock()
+    private var inFlight = 0
+
+    /// One-shot completion guard: an upstream query completes exactly once (timeout, recv error
+    /// or success), so the upstream connection is always cancelled and the counter always returned.
+    private final class Once {
+        private let lock = NSLock()
+        private var fired = false
+        func claim() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            if fired { return false }
+            fired = true
+            return true
+        }
+    }
+
     /// Matched domain set (exact + wildcard), injected by DomainSetManager
     var managedDomains: Set<String> = []
 
@@ -173,6 +202,7 @@ final class DNSProxyServer {
     func start(port: UInt16 = 53) {
         guard !running else { return }
         listenPort = NWEndpoint.Port(rawValue: port)!
+        shouldRun = true
 
         do {
             let params = NWParameters.udp
@@ -180,16 +210,50 @@ final class DNSProxyServer {
             listener?.newConnectionHandler = { [weak self] conn in
                 self?.handleConnection(conn)
             }
+            // Self-heal: if the listener fails (e.g. after wake where the socket is torn down),
+            // rebuild it as long as we are still supposed to be running.
+            listener?.stateUpdateHandler = { [weak self] state in
+                guard let self else { return }
+                switch state {
+                case .failed(let error):
+                    LogStore.shared.error("dns", "DNS listener failed: \(error.localizedDescription); restarting")
+                    self.handleListenerFailure()
+                case .cancelled:
+                    if self.shouldRun {
+                        LogStore.shared.warn("dns", "DNS listener cancelled unexpectedly; restarting")
+                        self.handleListenerFailure()
+                    }
+                default:
+                    break
+                }
+            }
             listener?.start(queue: .global(qos: .utility))
             running = true
             // Make matched-domain upstream queries go through the tunnel: exact host routes for the effective upstream DNS
             refreshUpstreamRouting()
+            LogStore.shared.info("dns", "DNS proxy listening on 127.0.0.1:\(port)")
         } catch {
             running = false
+            LogStore.shared.error("dns", "DNS proxy failed to start on port \(port): \(error.localizedDescription)")
+        }
+    }
+
+    /// Tear down the current listener and, if still expected to run, rebuild it shortly after.
+    private func handleListenerFailure() {
+        listener?.stateUpdateHandler = nil
+        listener?.cancel()
+        listener = nil
+        running = false
+        guard shouldRun else { return }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, self.shouldRun, !self.running else { return }
+            self.start(port: self.listenPort.rawValue)
         }
     }
 
     func stop() {
+        shouldRun = false
+        listener?.stateUpdateHandler = nil
         listener?.cancel()
         listener = nil
         running = false
@@ -238,9 +302,30 @@ final class DNSProxyServer {
 
     // MARK: - Forwarding
 
+    /// Try to reserve an in-flight slot. Returns false when the proxy is saturated, in which case
+    /// the caller must drop the query instead of allocating yet another connection.
+    private func beginQuery() -> Bool {
+        inFlightLock.lock()
+        defer { inFlightLock.unlock() }
+        if inFlight >= DNSProxyServer.maxInFlight { return false }
+        inFlight += 1
+        return true
+    }
+
+    private func endQuery() {
+        inFlightLock.lock()
+        defer { inFlightLock.unlock() }
+        if inFlight > 0 { inFlight -= 1 }
+    }
+
     private func forwardToUpstream(data: Data, servers: [String], connection: NWConnection,
                                    isManaged: Bool, origin: String?) {
         guard !servers.isEmpty else {
+            connection.cancel()
+            return
+        }
+        guard beginQuery() else {
+            LogStore.shared.warn("dns", "Too many in-flight queries (\(DNSProxyServer.maxInFlight)); dropping query")
             connection.cancel()
             return
         }
@@ -254,36 +339,62 @@ final class DNSProxyServer {
         // For matched-domain upstream queries, the host routes installed by RouteController already force them through the tunnel; no interface binding is needed here
 
         let upstreamConn = NWConnection(host: upstreamHost, port: upstreamPort, using: params)
+        let once = Once()
+        var timeoutWork: DispatchWorkItem?
+
+        // Single exit point: always cancels the upstream connection and releases the slot,
+        // whatever caused the completion (success, send/recv error or timeout).
+        func finish(_ reply: Data?) {
+            guard once.claim() else { return }
+            timeoutWork?.cancel()
+            upstreamConn.stateUpdateHandler = nil
+            upstreamConn.cancel()
+            if let reply {
+                connection.send(content: reply, completion: .contentProcessed { _ in
+                    connection.cancel()
+                })
+            } else {
+                connection.cancel()
+            }
+            endQuery()
+        }
+
+        // Upstream that never answers must not keep this connection alive forever
+        let timeout = DispatchWorkItem {
+            LogStore.shared.warn("dns", "Upstream DNS \(server) timed out after \(DNSProxyServer.queryTimeout)s")
+            finish(nil)
+        }
+        timeoutWork = timeout
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + DNSProxyServer.queryTimeout, execute: timeout)
+
+        upstreamConn.stateUpdateHandler = { state in
+            if case .failed(let error) = state {
+                LogStore.shared.warn("dns", "Upstream DNS \(server) connection failed: \(error.localizedDescription)")
+                finish(nil)
+            }
+        }
+
         upstreamConn.start(queue: .global(qos: .utility))
 
-        upstreamConn.send(content: data, completion: .contentProcessed { [weak self] error in
+        upstreamConn.send(content: data, completion: .contentProcessed { error in
             if error != nil {
-                // Upstream failed: try the next server
-                if servers.count > 1 {
-                    self?.forwardToUpstream(data: data, servers: Array(servers.dropFirst()),
-                                            connection: connection, isManaged: isManaged, origin: origin)
-                } else {
-                    connection.cancel()
-                }
+                finish(nil)
                 return
             }
 
             // Receive the upstream response
-            upstreamConn.receiveMessage { [weak self] respData, _, _, recvError in
+            upstreamConn.receiveMessage { respData, _, _, recvError in
                 guard let respData = respData, recvError == nil else {
-                    connection.cancel()
+                    finish(nil)
                     return
                 }
 
                 // Response for a matched domain: install the aggregated route, recording which domain pulled it in
                 if isManaged {
-                    self?.injectRecords(from: respData, origin: origin)
+                    DNSProxyServer.shared.injectRecords(from: respData, origin: origin)
                 }
 
-                // Send the response back to the client
-                connection.send(content: respData, completion: .contentProcessed { _ in
-                    connection.cancel()
-                })
+                finish(respData)
             }
         })
     }

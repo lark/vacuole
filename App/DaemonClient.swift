@@ -161,9 +161,16 @@ final class DaemonClient: ObservableObject {
     }
 
     func refreshConfigs() {
-        proxy()?.listConfigs { [weak self] data, _ in
+        proxy()?.listConfigs { [weak self] data, err in
             guard let data,
-                  let items = try? JSONDecoder().decode([ConfigListItem].self, from: data) else { return }
+                  let items = try? JSONDecoder().decode([ConfigListItem].self, from: data) else {
+                // Surface the failure instead of silently keeping an empty list, which used to look
+                // like "all configs disappeared" after a daemon-side read failure.
+                Task { @MainActor in
+                    if let err { self?.lastError = err }
+                }
+                return
+            }
             Task { @MainActor in
                 self?.configs = items
             }
@@ -243,6 +250,8 @@ final class DaemonClient: ObservableObject {
                     self?.tunnelState = .stopped
                     self?.activeConfigName = nil
                     self?.refreshRoutes()
+                    // Stopping the tunnel now also releases the DNS takeover; refresh so the UI no longer shows stale captured DNS
+                    self?.refreshDNSStatus()
                 } else {
                     self?.tunnelState = .error
                     self?.lastError = err ?? L("ui.error.stopFailed")
