@@ -33,7 +33,7 @@ To mitigate route bloating, Class C routes and route expiration are used.
 - **GUI** — a non-privileged menu bar app (SwiftUI + AppKit `NSStatusItem`).
 - **Daemon** — a root LaunchDaemon `vacuoled` that performs the privileged work (routes, tunnel,
   DNS). The two communicate over XPC.
-- **Tunnel** — uses bundled `wireguard-go` + `wg` directly; `wg-quick` is not used.
+- **Tunnel** — uses `wireguard-go` (`amneziawg-go` for AmneziaWG configs) plus `wg` directly; `wg-quick` is not used.
 
 ## Multi-user behavior
 
@@ -55,7 +55,11 @@ separate tunnel manager per user.
 ## Requirements
 
 - macOS 13 or later.
-- `wireguard-go` and `wg` binaries (bundled in the app or available in `/opt/homebrew/bin`).
+- `wireguard-go` and `wg` binaries (available in `/opt/homebrew/bin`, `/usr/local/bin`, or another path on `$PATH`).
+- `amneziawg-go` is only needed for AmneziaWG configurations (those carrying obfuscation settings
+  such as `Jc`/`Jmin`/`Jmax`, `S1`-`S4`, `H1`-`H4`, `I1`-`I5`). It is configured over its own control
+  socket, so `wg` is not required for it; when it is installed it can also run plain WireGuard configs.
+  It is looked up in `/opt/homebrew/bin`, `/usr/local/bin`, and `$PATH`.
 
 ## Build & Install
 

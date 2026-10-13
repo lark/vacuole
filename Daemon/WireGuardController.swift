@@ -40,14 +40,35 @@ final class WireGuardController {
     private(set) var lastError: String?
 
     private let wireguardGoPath: String?
+    private let amneziaGoPath: String?
     private let wgPath: String?
-    private var wireguardGoProc: Process?
-    /// Output pipe of wireguard-go. The readabilityHandler must be cleared explicitly after the process exits,
+    private var engineProc: Process?
+    /// Output pipe of the engine. The readabilityHandler must be cleared explicitly after the process exits,
     /// otherwise the READ-type DispatchSource keeps firing once the pipe hits EOF, pinning the daemon at 100% CPU.
     private var logPipe: Pipe?
 
+    /// Which userspace WireGuard implementation runs the tunnel.
+    private enum Engine {
+        case wireguardGo(String)
+        case amneziaWGGo(String)
+
+        var path: String {
+            switch self {
+            case .wireguardGo(let path), .amneziaWGGo(let path): return path
+            }
+        }
+
+        var name: String {
+            switch self {
+            case .wireguardGo: return "wireguard-go"
+            case .amneziaWGGo: return "amneziawg-go"
+            }
+        }
+    }
+
     private init() {
         wireguardGoPath = WireGuardController.findBinary("wireguard-go")
+        amneziaGoPath = WireGuardController.findBinary("amneziawg-go")
         wgPath = WireGuardController.findBinary("wg")
     }
 
@@ -174,12 +195,6 @@ final class WireGuardController {
         guard tunnelState != .running && tunnelState != .starting else {
             return (false, L("daemon.tunnel.alreadyRunning"))
         }
-        guard let wgGo = wireguardGoPath else {
-            return (false, L("daemon.tunnel.wireguardGoMissing"))
-        }
-        guard let wg = wgPath else {
-            return (false, L("daemon.tunnel.wgMissing"))
-        }
 
         tunnelState = .starting
 
@@ -202,43 +217,82 @@ final class WireGuardController {
             return (false, L("daemon.tunnel.peerPublicKeyMissing"))
         }
 
-        LogStore.shared.info("wg", "Starting tunnel: config=\(configName) address=\(firstAddr)")
+        // 2. Pick the userspace engine and start it. A config carrying AmneziaWG obfuscation settings
+        //    needs amneziawg-go (the stock engine rejects those keys); a plain config can also run on
+        //    amneziawg-go when wireguard-go is not installed.
+        let engine: Engine
+        if parsed.isAmnezia {
+            guard let path = amneziaGoPath else {
+                tunnelState = .error
+                LogStore.shared.error("wg", "Config \(configName) uses AmneziaWG settings, but amneziawg-go is not installed")
+                return (false, L("daemon.tunnel.amneziaGoMissing"))
+            }
+            engine = .amneziaWGGo(path)
+        } else if let path = wireguardGoPath {
+            engine = .wireguardGo(path)
+        } else if let path = amneziaGoPath {
+            engine = .amneziaWGGo(path)
+        } else {
+            tunnelState = .error
+            LogStore.shared.error("wg", "No userspace WireGuard engine found (wireguard-go / amneziawg-go)")
+            return (false, L("daemon.tunnel.wireguardGoMissing"))
+        }
 
-        // 2. Start wireguard-go and obtain the utun interface name
-        let startResult = startWireguardGo(at: wgGo)
-        switch startResult {
-        case .success(let ifname):
-            self.interfaceName = ifname
-            LogStore.shared.info("wg", "wireguard-go started, interface=\(ifname)")
+        LogStore.shared.info("wg", "Starting tunnel: config=\(configName) address=\(firstAddr) engine=\(engine.name)")
+
+        // The engine reports its interface name and control socket once it is up
+        var controlSocket: String?
+        switch startEngine(at: engine.path, engineName: engine.name) {
+        case .success(let started):
+            self.interfaceName = started.ifname
+            controlSocket = started.socketPath
+            LogStore.shared.info("wg", "\(engine.name) started, interface=\(started.ifname)")
         case .failure(let err):
             tunnelState = .error
-            LogStore.shared.error("wg", "Failed to start wireguard-go: \(err.message)")
-            return (false, L("daemon.tunnel.wireguardGoStartFailed", err.message))
+            LogStore.shared.error("wg", "Failed to start \(engine.name): \(err.message)")
+            return (false, L("daemon.tunnel.engineStartFailed", err.message))
         }
-        guard let ifname = self.interfaceName else {
+
+        guard let ifname = self.interfaceName, let socketPath = controlSocket else {
             tunnelState = .error
             return (false, L("daemon.tunnel.ifnameUnavailable"))
         }
 
-        // 3. Generate a wg-compatible config (strip wg-quick-specific fields)
-        let wgConf = WireGuardController.stripWgQuickDirectives(rawConfig)
-        let tmpConf = "/tmp/vacuole_\(configName)_wg.conf"
-        do {
-            try wgConf.write(toFile: tmpConf, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tmpConf)
-        } catch {
-            stopWireguardGo()
-            tunnelState = .error
-            return (false, L("daemon.tunnel.writeTempConfigFailed", error.localizedDescription))
-        }
-
-        // 4. wg setconf
-        let setResult = runCommand(path: wg, args: ["setconf", ifname, tmpConf])
-        if case .failure(let err) = setResult {
-            stopWireguardGo()
+        // 3./4. Apply the configuration: `wg setconf` for the stock engine, the UAPI for amneziawg-go
+        switch engine {
+        case .wireguardGo:
+            guard let wg = wgPath else {
+                stopEngine()
+                tunnelState = .error
+                return (false, L("daemon.tunnel.wgMissing"))
+            }
+            let wgConf = WireGuardController.stripWgQuickDirectives(rawConfig)
+            let tmpConf = "/tmp/vacuole_\(configName)_wg.conf"
+            do {
+                try wgConf.write(toFile: tmpConf, atomically: true, encoding: .utf8)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tmpConf)
+            } catch {
+                stopEngine()
+                tunnelState = .error
+                return (false, L("daemon.tunnel.writeTempConfigFailed", error.localizedDescription))
+            }
+            let setResult = runCommand(path: wg, args: ["setconf", ifname, tmpConf])
             try? FileManager.default.removeItem(atPath: tmpConf)
-            tunnelState = .error
-            return (false, L("daemon.tunnel.setconfFailed", err.message))
+            if case .failure(let err) = setResult {
+                stopEngine()
+                tunnelState = .error
+                return (false, L("daemon.tunnel.setconfFailed", err.message))
+            }
+
+        case .amneziaWGGo:
+            do {
+                try WireGuardUAPI.apply(parsed, socketPath: socketPath)
+            } catch {
+                stopEngine()
+                tunnelState = .error
+                LogStore.shared.error("wg", "amneziawg-go rejected the configuration: \(error)")
+                return (false, L("daemon.tunnel.amneziaConfigFailed", error.localizedDescription))
+            }
         }
 
         // 5. Configure the interface address via ifconfig (point-to-point)
@@ -251,8 +305,7 @@ final class WireGuardController {
 
         let ifconfigResult = runCommand(path: "/sbin/ifconfig", args: [ifname, "inet", "\(addrOnly)/32", peerAddr, "alias"])
         if case .failure(let err) = ifconfigResult {
-            stopWireguardGo()
-            try? FileManager.default.removeItem(atPath: tmpConf)
+            stopEngine()
             tunnelState = .error
             return (false, L("daemon.tunnel.ifconfigAddrFailed", err.message))
         }
@@ -260,8 +313,7 @@ final class WireGuardController {
         // 6. ifconfig up
         let upResult = runCommand(path: "/sbin/ifconfig", args: [ifname, "up"])
         if case .failure(let err) = upResult {
-            stopWireguardGo()
-            try? FileManager.default.removeItem(atPath: tmpConf)
+            stopEngine()
             tunnelState = .error
             return (false, L("daemon.tunnel.ifconfigUpFailed", err.message))
         }
@@ -270,8 +322,6 @@ final class WireGuardController {
         if let mtu = parsed.mtu {
             _ = runCommand(path: "/sbin/ifconfig", args: [ifname, "mtu", String(mtu)])
         }
-
-        try? FileManager.default.removeItem(atPath: tmpConf)
 
         tunnelState = .running
         activeConfigName = configName
@@ -289,7 +339,7 @@ final class WireGuardController {
         LogStore.shared.info("wg", "Stopping tunnel: \(activeConfigName ?? "?")")
         tunnelState = .stopping
 
-        stopWireguardGo()
+        stopEngine()
 
         if let ifname = interfaceName {
             _ = runCommand(path: "/sbin/ifconfig", args: [ifname, "down"])
@@ -323,15 +373,17 @@ final class WireGuardController {
 
     // MARK: - Internals
 
-    private func startWireguardGo(at path: String) -> Result<String, CmdError> {
-        // Run with -f (foreground) so this process can supervise and reliably terminate it; otherwise wireguard-go daemonizes itself.
+    /// Start the userspace engine in the foreground and wait until it reports both its utun
+    /// interface name and a usable control socket.
+    private func startEngine(at path: String, engineName: String) -> Result<(ifname: String, socketPath: String), CmdError> {
+        // Run with -f (foreground) so this process can supervise and reliably terminate it; otherwise the engine daemonizes itself.
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: path)
         proc.arguments = ["-f", "utun"]
         // Detach stdin: without an explicit value the child can inherit a bad fd and posix_spawn fails with EBADF
         proc.standardInput = FileHandle.nullDevice
 
-        // Use WG_TUN_NAME_FILE to have wireguard-go report the real interface name (more reliable than parsing stdout)
+        // Use WG_TUN_NAME_FILE to have the engine report the real interface name (more reliable than parsing stdout)
         let nameFile = "/var/run/wireguard/vacuole.name"
         try? FileManager.default.createDirectory(atPath: "/var/run/wireguard",
                                                  withIntermediateDirectories: true)
@@ -345,7 +397,7 @@ final class WireGuardController {
         proc.standardOutput = pipe
         proc.standardError = pipe
         logPipe = pipe
-        // Drain the pipe asynchronously so a full buffer doesn't block wireguard-go, while capturing logs into LogStore.
+        // Drain the pipe asynchronously so a full buffer doesn't block the engine, while capturing logs into LogStore.
         // Note: clear the handler on EOF, otherwise the READ source keeps firing (the root cause of runaway 100% CPU).
         pipe.fileHandleForReading.readabilityHandler = { fh in
             let d = fh.availableData
@@ -365,43 +417,44 @@ final class WireGuardController {
         } catch {
             return .failure(CmdError("Process start failed: \(error.localizedDescription)"))
         }
-        wireguardGoProc = proc
+        engineProc = proc
 
         // 1) Poll the name file (up to 5s)
         var ifname: String?
         let nameDeadline = Date().addingTimeInterval(5)
         while Date() < nameDeadline {
             if let content = try? String(contentsOfFile: nameFile, encoding: .utf8) {
-                let name = content.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !name.isEmpty && name.lowercased().hasPrefix("utun") {
-                    ifname = name
+                let reported = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !reported.isEmpty && reported.lowercased().hasPrefix("utun") {
+                    ifname = reported
                     break
                 }
             }
             if !proc.isRunning {
-                return .failure(CmdError("wireguard-go exited immediately after start"))
+                return .failure(CmdError("\(engineName) exited immediately after start"))
             }
             usleep(100_000)
         }
-        guard let name = ifname else {
-            stopWireguardGo()
-            return .failure(CmdError("Timed out waiting for wireguard-go to report the interface name"))
+        guard let interface = ifname else {
+            stopEngine()
+            return .failure(CmdError("Timed out waiting for \(engineName) to report the interface name"))
         }
 
-        // 2) Poll for socket readiness (up to 3s), otherwise wg setconf reports No such file or directory
-        let sockPath = "/var/run/wireguard/\(name).sock"
-        let sockDeadline = Date().addingTimeInterval(3)
-        while Date() < sockDeadline {
-            if FileManager.default.fileExists(atPath: sockPath) {
-                return .success(name)
+        // 2) Poll for the control socket (up to 3s): the daemon configures the interface through it
+        //    (wg setconf for wireguard-go, the UAPI for amneziawg-go), so it has to exist first.
+        let socketDeadline = Date().addingTimeInterval(3)
+        while Date() < socketDeadline {
+            if let socket = WireGuardUAPI.socketPath(interface: interface) {
+                return .success((ifname: interface, socketPath: socket))
             }
             usleep(100_000)
         }
-        return .failure(CmdError("Timed out waiting for the interface socket to become ready: \(sockPath)"))
+        stopEngine()
+        return .failure(CmdError("Timed out waiting for the control socket of \(interface) to become ready"))
     }
 
-    private func stopWireguardGo() {
-        if let proc = wireguardGoProc {
+    private func stopEngine() {
+        if let proc = engineProc {
             if proc.isRunning {
                 proc.terminate()   // SIGTERM
                 // Wait up to 3s, then SIGKILL if still running
@@ -414,7 +467,7 @@ final class WireGuardController {
                 }
             }
             proc.waitUntilExit()
-            wireguardGoProc = nil
+            engineProc = nil
         }
         // Explicitly clear and close the output pipe: after exit the pipe is at EOF and an uncancelled READ source keeps firing
         logPipe?.fileHandleForReading.readabilityHandler = nil
@@ -424,21 +477,22 @@ final class WireGuardController {
 
     // MARK: - Startup fallback
 
-    /// Clean up wireguard-go processes and tunnel interfaces left from a previous run.
+    /// Clean up userspace WireGuard engines and tunnel interfaces left from a previous run.
     ///
-    /// vacuole always starts the tunnel with `wireguard-go -f utun` (foreground); `-f` is this app's signature argument,
+    /// vacuole always starts the tunnel with `<engine> -f utun` (foreground); `-f` is this app's signature argument,
     /// third parties (such as wg-quick) don't pass `-f`, so leftover processes can be matched precisely by this signature and killed.
     /// When the process exits its utun interface is removed by the kernel, avoiding the stale state where the app
     /// has not started a tunnel but the utun still exists and target addresses remain reachable.
     func cleanupOrphaned() {
-        let result = WireGuardController.runCommandCapture(path: "/usr/bin/pgrep",
-                                                           args: ["-f", "wireguard-go -f utun"])
-        if case .success(let out) = result {
+        for binary in ["wireguard-go", "amneziawg-go"] {
+            let result = WireGuardController.runCommandCapture(path: "/usr/bin/pgrep",
+                                                               args: ["-f", "\(binary) -f utun"])
+            guard case .success(let out) = result else { continue }
             for line in out.split(separator: "\n") {
                 let pid = line.trimmingCharacters(in: .whitespaces)
                 guard let n = Int32(pid) else { continue }
                 kill(n, SIGKILL)
-                LogStore.shared.warn("wg", "Startup fallback: killing leftover wireguard-go process pid=\(pid)")
+                LogStore.shared.warn("wg", "Startup fallback: killing leftover \(binary) process pid=\(pid)")
             }
         }
         try? FileManager.default.removeItem(atPath: "/var/run/wireguard/vacuole.name")
