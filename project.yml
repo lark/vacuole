@@ -70,6 +70,7 @@ targets:
       base:
         PRODUCT_NAME: vacuole
         PRODUCT_BUNDLE_IDENTIFIER: com.vacuole.app
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     postBuildScripts:
       - name: Embed LaunchDaemon
         basedOnDependencyAnalysis: false

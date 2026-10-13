@@ -1,0 +1,35 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#EEF2FA"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4A80F7"/>
+      <stop offset="1" stop-color="#16309C"/>
+    </linearGradient>
+    <mask id="vCut">
+      <rect x="0" y="0" width="1024" height="1024" fill="#FFFFFF"/>
+      <path d="M400 381 L512 643 L624 381" fill="none" stroke="#000000"
+            stroke-width="86" stroke-linecap="round" stroke-linejoin="round"
+            transform="translate(512 512) scale(0.72) translate(-512 -512)"/>
+    </mask>
+  </defs>
+
+  <!-- White rounded-square tile on Apple's macOS icon grid (824x824 centred, radius 185.4).
+       No baked-in drop shadow: Finder derives the selection shading from the alpha channel, so any
+       shadow bleeding toward the canvas edge makes the selection halo look like a hard square. -->
+  <rect x="100" y="100" width="824" height="824" rx="185.4" fill="url(#tile)"
+        stroke="#E2E8F4" stroke-width="2"/>
+
+  <!-- Blue shield with a hollow (white) V -->
+  <path d="M512 208
+           C600 262 690 282 748 292
+           L748 536
+           C748 668 648 764 512 806
+           C376 764 276 668 276 536
+           L276 292
+           C334 282 424 262 512 208 Z"
+        fill="url(#shield)" mask="url(#vCut)"
+        transform="translate(512 512) scale(1.1) translate(-512 -512)"/>
+</svg>
