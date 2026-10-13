@@ -52,6 +52,7 @@ struct LogsTab: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(SettingsUI.panePadding)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -87,6 +88,8 @@ struct LogsTab: View {
                         }
                     }
                 }
+                // Same outer margin as every other settings pane, so the log list does not touch the window edge
+                .padding(SettingsUI.panePadding)
             }
         }
         .onAppear {
