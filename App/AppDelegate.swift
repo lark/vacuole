@@ -136,7 +136,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(infoItem(version))
         }
         if let error = client.lastError {
-            menu.addItem(infoItem(L("ui.menu.errorFormat", error)))
+            // A menu item's title sets the menu width and daemon errors are unbounded, so only a
+            // clipped preview goes into the title; the full text is reachable through the item's
+            // tooltip and the detail alert. (macOS popovers/notifications would need the menu to
+            // close first or an extra user authorization, so an alert is the cheaper surface.)
+            let item = actionItem(L("ui.menu.errorFormat", Self.clipped(error)), #selector(showErrorDetails))
+            item.toolTip = error
+            menu.addItem(item)
         }
 
         menu.addItem(.separator())
@@ -191,7 +197,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let switchItem = actionItem(L("ui.menu.switchDomainSet"), nil)
             let submenu = NSMenu()
             for set in client.domainSets {
-                let title = set.id == client.activeSetID ? "✓ \(set.name)" : set.name
+                // A "✓ " prefix would shift this one title past the others; a trailing marker keeps
+                // every title starting at the same x
+                let title = set.id == client.activeSetID ? "\(set.name) ✓" : set.name
                 let item = actionItem(title, #selector(activateDomainSet(_:)))
                 item.representedObject = set.id.uuidString
                 submenu.addItem(item)
@@ -227,6 +235,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return item
     }
 
+    /// Clip text for use as a menu item title (the title drives the menu's width).
+    private static func clipped(_ text: String, limit: Int = 40) -> String {
+        text.count <= limit ? text : String(text.prefix(limit)) + "…"
+    }
+
     // MARK: - Menu actions
 
     @objc private func startTunnel(_ sender: NSMenuItem) {
@@ -245,6 +258,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func reconnectDaemon() {
         DaemonClient.shared.connect()
+    }
+
+    /// Show the untruncated last error. `informativeText` is not selectable, so a button copies it.
+    @objc private func showErrorDetails() {
+        guard let error = DaemonClient.shared.lastError else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = L("ui.menu.errorDetailsTitle")
+        alert.informativeText = error
+        alert.addButton(withTitle: L("ui.action.ok"))
+        alert.addButton(withTitle: L("ui.menu.errorCopy"))
+        if alert.runModal() == .alertSecondButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(error, forType: .string)
+        }
     }
 
     /// Flush the resolver cache through the daemon (the commands need root).
